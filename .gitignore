@@ -1,0 +1,25 @@
+# Dependencies & builds
+node_modules/
+frontend/dist/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Secrets — use backend/.env.example as the template
+.env
+*.env
+!.env.example
+
+# Generated data (rebuilt by the scripts, published to Cloudflare R2)
+backend/data/
+backend/publish/
+
+# Reference PDFs (NASA product user guides — linked in the README instead)
+guideNote/
+
+# Editors & OS
+.DS_Store
+.vscode/
+.idea/
+*.log

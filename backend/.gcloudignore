@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+publish/
+data/ingest.log
+data/*.part
+.gcloudignore
+.git
+data/
