@@ -6,6 +6,20 @@ NASA Space Apps Challenge 2026 · *Harmonization of MODIS and VIIRS Hot Spots* �
 
 ![FireLens home page](docs/firelens-home.jpg)
 
+## In short
+
+**The problem.** NASA satellites have recorded fires since 2000, but the record is split between two sensors: MODIS,
+since 2000, and VIIRS, since 2012, which sees about four times more fires. So fire counts falsely jump in 2012, and old
+and new years cannot be compared.
+
+**What we built.** FireLens converts VIIRS detections into MODIS-equivalent counts with a model trained on the years both
+sensors flew together, giving one consistent fire record from 2000 to today for any place on Earth. On this record we
+built a web app with a burning activity calendar: which months and years burn most, how this month compares with the
+2003–2025 median, unusual weeks, live fires and email alerts, with every result downloadable as CSV and charts.
+
+**Who it helps.** Emergency responders get early warning, scientists can study long-term fire trends on one scale, and
+land managers can plan for the critical fire season.
+
 ---
 
 ## The problem
@@ -38,6 +52,22 @@ FireLens puts both sensors on one scale and turns the result into a tool for ear
 - **Fire alerts by email.** Strong fires, confirmed fires or an unusual week for your area — checked every hour.
 - **Area report.** A one-page printable summary for responders and land managers.
 
+## How FireLens answers the challenge
+
+| The challenge asks for | In FireLens |
+| :--- | :--- |
+| Harmonize MODIS and VIIRS so the sensor of origin no longer matters | A gradient-boosted VIIRS → MODIS model with local anchoring; one record from 2000 to today (*Harmonize* page; *Source* switch on the calendar) |
+| A burning activity calendar from the early 2000s to the present | Every month or week since November 2000 on one grid, updated daily (*Fire Calendar*) |
+| Select a region and a date range, then download analytics and visualizations | Any area and any dates down to one day; CSV tables, PNG charts and map, or one ZIP (*Date Range*) |
+| Which periods of the year and which years burn most | Typical year month by month, busiest months, critical period, most-burning years and months |
+| Compare the current month with the historical median | This month, last month and year to date against the 2003–2025 median, with rank (*Compared with the median*) |
+| How a current fire compares with previous ones | The same dates in every year since 2000, with median and rank |
+| Colour ramps for similarities and differences | Log colour scale with a numeric legend; viridis and cividis (colour-blind safe) |
+| A downloadable CSV of hotspots detected during a search | Every NASA FIRMS detection in the area and dates, with its harmonized weight |
+| A map where users draw the area, or latitude and longitude | Draw a box, click a country, search, upload GeoJSON, or type latitude, longitude and a radius |
+| Anomalies against multi-year averages; number of fires detected | Early or late onset, surges and quiet spells against 2003–2025, an eight-week outlook; raw NASA detections beside the harmonized numbers (*Anomalies*) |
+| Audience: early warning, responders, scientists, land managers, firefighters | Live fires near you, hourly email alerts, a *where to look now* list and a printable area report |
+
 ## How the harmonization works
 
 | Step | What we do |
@@ -47,11 +77,25 @@ FireLens puts both sensors on one scale and turns the result into a tool for ear
 | Grid | 0.25° cells × a fixed 52-week year: detections, summed FRP, night detections (about 225 MB for the planet). |
 | Model | A gradient-boosted Poisson model predicts MODIS detections in a cell-week from VIIRS count, FRP, night share, latitude, season and the cell's long-run VIIRS/MODIS ratio. |
 | Anchoring | A per-area factor aligns the VIIRS-based record with that area's own MODIS record over 2012–2019. |
-| Gaps | NASA's official missing-data table: MODIS weeks are scaled for missing Terra/Aqua days; S-NPP gaps are filled from NOAA-20 (S-NPP ÷ NOAA-20 ≈ 1.02). |
+| Gaps | NASA's official missing-data table: MODIS weeks are scaled for missing Terra/Aqua days; S-NPP gaps are filled from NOAA-20 (S-NPP ÷ NOAA-20 ≈ 1.02). NOAA-20 also stands in for the S-NPP near-real-time feed, which has had no data since 2 November 2026. |
 | One record | MODIS to 2011, then VIIRS in MODIS-equivalent units, continued by NOAA-20 — so it survives the retirement of MODIS and Suomi-NPP. |
 
 The calendar shows weeks, but percentiles, z-scores and alerts use two-week windows: the MODIS user guide warns that
 fire series binned shorter than about eight days are biased by orbit geometry.
+
+## NASA data used
+
+| NASA data | How FireLens uses it |
+| :--- | :--- |
+| MODIS Collection 6.1 active fires (MCD14ML, Terra and Aqua), Nov 2000 → | The 2000–2011 record, and the 2012–2019 overlap years that train and anchor the model |
+| VIIRS 375 m active fires, Suomi NPP (VNP14IMGML), Jan 2012 → | Converted to MODIS-equivalent detections to continue the record |
+| VIIRS 375 m active fires, NOAA-20 (VJ114IMGML), Apr 2018 → | Fills Suomi NPP gaps and carries the record forward |
+| FIRMS near-real-time feeds and area API (MODIS, VIIRS S-NPP / NOAA-20 / NOAA-21) | Tops the record up to today; live fires, alerts and the hotspot CSV for any area and dates |
+| FIRMS data-availability and missing-data tables | Chooses the standard or near-real-time product per day; corrects weeks with missing satellite days |
+| MODIS C6/C6.1 and VIIRS Collection 2 Active Fire user guides | Cleaning rules, confidence classes and the ≥ 8-day binning behind our two-week statistics |
+
+The full 2000–2026 archive (647 monthly NASA source files and the harmonized tiles) is stored on Cloudflare R2 and
+updated every day.
 
 ## Does it work?
 
