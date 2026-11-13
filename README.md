@@ -4,7 +4,7 @@
 
 NASA Space Apps Challenge 2026 · *Harmonization of MODIS and VIIRS Hot Spots* · Team Aquila, Rajshahi, Bangladesh
 
-**Live:** https://firelens.tech
+![FireLens home page](docs/firelens-home.jpg)
 
 ---
 
