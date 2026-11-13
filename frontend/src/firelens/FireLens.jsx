@@ -3,6 +3,9 @@ import React from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './firelens.css';
+import { PALETTES, rampOf, cssGradient, logTicks } from './palettes.js';
+import { svgCalendar, svgBars, svgDaily, svgLines, svgToPng, canvasToPng, saveBlob, toCsv, makeZip } from './exporters.js';
+import { RangePage, MonthStatsCard, CoordForm, SampleBanner } from './Panels.jsx';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 // Pre-built reports on Cloudflare R2 / CDN (scripts/build_reports.py); empty = always ask the API.
@@ -26,12 +29,14 @@ const REG = {
   Canada: { country: 'Canada', lon: -100, lat: 56, sub: 'North America', coord: '56.0°N, 100.0°W', span: 60, peak: 30, spread: 4, wk: 400, seed: 11, cover: 'Boreal forest' },
   'SE Australia': { lon: 147, lat: -33, sub: 'Victoria · New South Wales', coord: '33.0°S, 147.0°E', span: 14, peak: 50, spread: 4, wk: 150, seed: 12, cover: 'Eucalypt forest' },
   Indonesia: { country: 'Indonesia', lon: 114, lat: -1.5, sub: 'Southeast Asia', coord: '1.5°S, 114.0°E', span: 48, peak: 36, spread: 4, wk: 400, seed: 10, cover: 'Peatland / plantation' },
+  Chilecito: { lon: -67.6, lat: -29.15, sub: 'La Rioja, Argentina', coord: '29.2°S, 67.6°W', span: 4, peak: 31, spread: 5, wk: 20, seed: 13, cover: 'Shrubland / mountain grassland' },
 };
 const ORDER = Object.keys(REG);
 ORDER.forEach(k => { REG[k].name = k; REG[k].scale = REG[k].scale || REG[k].wk / 3200; });
-const QUICK = ['Bangladesh', 'Amazon', 'California'];
+const QUICK = ['Bangladesh', 'Amazon', 'California', 'Argentina'];
 // Curated case studies
 const CASES = [
+  { region: 'Chilecito', year: 2026, page: 'range', range: ['2026-07-25', '2026-08-25'], title: 'Chilecito, La Rioja — the July 2026 fire', note: 'The event in CONAE’s challenge video. Burning starts 27 July (262 detections on 28 July); 25 Jul–25 Aug ran about 3× the 2003–2025 median for those dates' },
   { region: 'Canada', year: 2023, page: 'calendar', title: 'Canada — the record 2023 wildfire season', note: 'Harmonized burning 5.4× the 2003–2025 mean — the highest of all 27 years' },
   { region: 'SE Australia', year: 2019, page: 'calendar', title: 'South-east Australia — Black Summer 2019–20', note: 'The biggest fire season on record there (5×); late December 2019 flagged EXTREME' },
   { region: 'California', year: 2020, page: 'calendar', title: 'California — the 2020 fire year', note: '3.7× the mean, highest in the record' },
@@ -40,20 +45,34 @@ const CASES = [
   { region: 'Thailand', year: 2026, page: 'anomalies', title: 'Thailand 2026 — late start, then a surge', note: 'Quiet February–March, then April burning up to 4× normal; both sensors agree' },
 ];
 const CHIP_IMG = { Bangladesh: 'https://flagcdn.com/w80/bd.png', Amazon: 'https://commons.wikimedia.org/wiki/Special:FilePath/Amazon_Manaus_forest.jpg?width=120', California: 'https://commons.wikimedia.org/wiki/Special:FilePath/Golden_Gate_Bridge_as_seen_from_Battery_East.jpg?width=120', Argentina: 'https://flagcdn.com/w80/ar.png', Australia: 'https://flagcdn.com/w80/au.png' };
-const BBOX = { Canada: { west: -141, south: 41.7, east: -52.6, north: 83.1 }, 'SE Australia': { west: 140, south: -39, east: 154, north: -27 }, Amazon: { west: -65, south: -15, east: -50, north: -5 }, California: { west: -124.5, south: 32.5, east: -114, north: 42 }, Bangladesh: { west: 88, south: 20.6, east: 92.7, north: 26.6 }, Argentina: { west: -73.6, south: -55.1, east: -53.6, north: -21.8 }, Australia: { west: 112.9, south: -43.7, east: 153.7, north: -10.6 }, India: { west: 68.1, south: 6.7, east: 97.4, north: 35.5 }, Thailand: { west: 97.3, south: 5.6, east: 105.6, north: 20.5 }, Indonesia: { west: 95, south: -11, east: 141, north: 6 } };
+const BBOX = { Canada: { west: -141, south: 41.7, east: -52.6, north: 83.1 }, 'SE Australia': { west: 140, south: -39, east: 154, north: -27 }, Chilecito: { west: -68.3, south: -29.7, east: -66.9, north: -28.6 }, Amazon: { west: -65, south: -15, east: -50, north: -5 }, California: { west: -124.5, south: 32.5, east: -114, north: 42 }, Bangladesh: { west: 88, south: 20.6, east: 92.7, north: 26.6 }, Argentina: { west: -73.6, south: -55.1, east: -53.6, north: -21.8 }, Australia: { west: 112.9, south: -43.7, east: 153.7, north: -10.6 }, India: { west: 68.1, south: 6.7, east: 97.4, north: 35.5 }, Thailand: { west: 97.3, south: 5.6, east: 105.6, north: 20.5 }, Indonesia: { west: 95, south: -11, east: 141, north: 6 } };
 const RAW = { Amazon: [72, 2051, 6127, 26268.2], California: [6, 131, 410, 1520], Bangladesh: [11, 236, 380, 1702], Global: [3120, 41880, 184000, 522000], Africa: [1310, 18200, 61000, 190000], 'Southeast Asia': [240, 5600, 11200, 48000], 'South Asia': [310, 6400, 9800, 41000], Australia: [150, 2900, 7600, 30100] };
 const ALPHA = [['All', 'Ensemble', 4.2], ['Forest', 'Tropical / temperate forest', 4.2], ['Savanna', 'Savanna & grassland', 3.1], ['Cropland', 'Agricultural burning', 5.6], ['Shrubland', 'Shrub & chaparral', 3.6]];
 const FIELDS = [['latitude, longitude', 'Both', 'Fire pixel centre, WGS84 decimal degrees'], ['brightness / bright_ti4', 'MODIS / VIIRS', 'Brightness temperature (K), 4 µm band'], ['bright_t31 / bright_ti5', 'MODIS / VIIRS', 'Background temperature (K), 11 µm band'], ['frp', 'Both', 'Fire radiative power (MW) — burning intensity'], ['confidence', 'Both', 'MODIS 0–100 %; VIIRS l / n / h'], ['acq_date, acq_time', 'Both', 'Overpass date and UTC time (HHMM)'], ['satellite', 'Both', 'Terra / Aqua (MODIS); N / N20 (VIIRS)'], ['scan, track', 'Both', 'Pixel footprint in km (≈1.3×1.1 vs 0.5×0.6)'], ['daynight', 'Both', 'D = day, N = night overpass'], ['version', 'Both', 'Collection, e.g. 6.1NRT / 2.0NRT']];
-const ENDPOINTS = [['POST', '/calendar/report', 'Everything for one AOI: calendar, baseline, anomalies, outlook, calibration'], ['POST', '/calendar/generate', '52-week × 2000–present harmonized burning calendar'], ['POST', '/calendar/anomalies', 'Early/late onset, surge and suppression alerts'], ['POST', '/harmonize/calculate', 'Live MODIS + VIIRS window → harmonized count & FRP'], ['POST', '/fires/live', 'Raw NRT MODIS + VIIRS hotspots for a bbox'], ['GET', '/fires/global', 'Today\'s worldwide VIIRS detections on a grid'], ['GET', '/archive/grid', 'One archived year on a grid (harmonized / MODIS / VIIRS)'], ['GET', '/harmonize/model', 'Out-of-time validation of the harmonization model']];
+const ENDPOINTS = [['POST', '/calendar/report', 'Everything for one AOI: calendar, baseline, anomalies, outlook, calibration, month statistics'], ['POST', '/calendar/range', 'A date range: harmonized total, weekly series, the same dates in every year, rank and median'], ['POST', '/hotspots/search', 'Every MODIS / VIIRS hotspot in an area between two dates, with a daily table'], ['POST', '/hotspots/csv', 'The same hotspots as a CSV file, one row per detection'], ['POST', '/hotspots/history', 'Up to 7 days: the same dates in every year from real detections'], ['POST', '/calendar/generate', '52-week × 2000–present harmonized burning calendar'], ['POST', '/calendar/anomalies', 'Early/late onset, surge and suppression alerts'], ['POST', '/harmonize/calculate', 'Live MODIS + VIIRS window → harmonized count & FRP'], ['POST', '/fires/live', 'Raw NRT MODIS + VIIRS hotspots for a bbox'], ['GET', '/fires/global', 'Today\'s worldwide VIIRS detections on a grid'], ['GET', '/archive/grid', 'One archived year on a grid (harmonized / MODIS / VIIRS)'], ['GET', '/harmonize/model', 'Out-of-time validation of the harmonization model']];
 const SEV = { CRITICAL: ['#ff4a3a', 'rgba(255,74,58,.14)'], WARNING: ['#ffa53a', 'rgba(255,165,58,.14)'], INFO: ['#5aa0ff', 'rgba(90,160,255,.14)'] };
 const TYPE = { EARLY_ONSET: 'Early season onset', LATE_ONSET: 'Late season onset', EXTREME_FIRE_SURGE: 'Extreme fire surge', UNUSUAL_SUPPRESSION: 'Unusual suppression' };
 const wkRange = (y, w) => { const f = d => new Date(Date.UTC(y, 0, 1 + d)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); return f((w - 1) * 7) + '–' + f(w === 52 ? 364 : w * 7 - 1); };
 const wkDate = (y, w) => new Date(Date.UTC(y, 0, 1 + (w - 1) * 7)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const ord = p => { p = Math.round(p); const s = (p % 10 === 1 && p !== 11) ? 'st' : (p % 10 === 2 && p !== 12) ? 'nd' : (p % 10 === 3 && p !== 13) ? 'rd' : 'th'; return p + s; };
 const CLUSTERS = [[22,-8,11,6,700],[8,10,14,3,450],[-58,-9,9,5,380],[-48,-14,5,4,180],[101,17,6,4,340],[80,23,7,4,300],[90.4,23.8,1.3,1.2,90],[115,58,22,5,240],[131,-15,11,3,300],[-121,39,2.5,3.5,90],[-115,57,12,4,110],[112,-1,7,3,150],[-62,-29,6,6,120],[30,50,8,3,120],[-100,20,6,4,90],[28,-18,6,4,200]];
-const STOPS = [[0,[18,26,61]],[.18,[31,43,107]],[.35,[90,42,122]],[.5,[176,40,63]],[.65,[229,64,42]],[.8,[255,122,26]],[1,[255,208,74]]];
-const ramp = t => { t = Math.max(0, Math.min(1, t)); for (let i = 1; i < STOPS.length; i++) { if (t <= STOPS[i][0]) { const [a, ca] = STOPS[i-1], [b, cb] = STOPS[i]; const k = (t - a) / (b - a); return 'rgb(' + ca.map((v, j) => Math.round(v + (cb[j] - v) * k)).join(',') + ')'; } } return 'rgb(255,208,74)'; };
+// Calendar colour ramp — switchable to colour-blind-safe palettes (palettes.js); remembered per browser.
+const savedPalette = (() => { try { const p = localStorage.getItem('fl-palette'); return PALETTES[p] ? p : 'fire'; } catch (_) { return 'fire'; } })();
+let STOPS = PALETTES[savedPalette].stops;
+const ramp = t => rampOf(STOPS, t);
+const isoDay = d => d.toISOString().slice(0, 10);
+const todayUTC = () => isoDay(new Date());
+const addDays = (iso, n) => isoDay(new Date(Date.parse(iso + 'T00:00:00Z') + n * 864e5));
+const dayDiff = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
+const dLabel = iso => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+const HOT_MAX_DAYS = 62;  // must match services/hotspots.MAX_DAYS
+const HISTORY_MAX_DAYS = 7;  // must match services/hotspots.HISTORY_MAX_DAYS; shorter than the weekly record can resolve
+// Dark or light text, whichever reads best on a cell colour.
+const inkOn = rgb => { const m = /(\d+)[^\d]+(\d+)[^\d]+(\d+)/.exec(rgb || ''); if (!m) return '#e8eefb'; const l = (.2126 * m[1] + .7152 * m[2] + .0722 * m[3]) / 255; return l > .52 ? '#0b1020' : '#ffffff'; };
+const SENSOR_COL = { MODIS: '#3b8cff', VIIRS_SNPP: '#ffb020', VIIRS_NOAA20: '#ff5ab4', VIIRS_NOAA21: '#9be15d' };
+const SENSOR_NAME = { MODIS: 'MODIS (Terra/Aqua)', VIIRS_SNPP: 'VIIRS S-NPP', VIIRS_NOAA20: 'VIIRS NOAA-20', VIIRS_NOAA21: 'VIIRS NOAA-21' };
 const fmt = n => Math.round(n).toLocaleString('en-US');
+const compactN = v => (v >= 1e7 ? Math.round(v / 1e6) + 'M' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e4 ? Math.round(v / 1000) + 'K' : v >= 1000 ? (v / 1000).toFixed(1) + 'K' : String(Math.round(v)));
 const fmtK = v => v >= 1000 ? (Math.round(v / 100) / 10) + 'K' : String(Math.round(v));
 const niceStep = x => { const p = Math.pow(10, Math.floor(Math.log10(x))); const m = x / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p; };
 const LIVE_MAX_AGE = 30 * 60e3;  // a live report older than this is fetched again (the API refreshes areas every 30 min)
@@ -74,7 +93,9 @@ const el2owner = map => map.getContainer().__owner;
 export default class FireLens extends React.Component {
   static defaultProps = { useLiveApi: true, apiBase: API_BASE, autoRotate: true, showSatellites: true, showGlobeLabels: true, defaultRegion: 'Global' };
   state = { alert: { email: '', name: '', mode: 'region', radius: 25, lat: null, lon: null, strong: true, frp: 50, confirmed: false, unusual: false, delta: 50, freq: 'instant', consent: false },
-    region: this.props.defaultRegion || 'Global', source: 'harmonized', year: CUR_YEAR, playing: false, tip: null, calMode: 'weekly', calMetric: 'count', mapZoom: 1, page: 'home', days: 1, landcover: 'All', sev: 'All', apiTick: 0 };
+    region: this.props.defaultRegion || 'Global', source: 'harmonized', year: CUR_YEAR, playing: false, tip: null, calMode: 'monthly', calMetric: 'count', mapZoom: 1, page: 'home', days: 1, landcover: 'All', sev: 'All', apiTick: 0,
+    palette: savedPalette, rangeFrom: addDays(todayUTC(), -29), rangeTo: todayUTC(), coord: { open: false, lat: '', lon: '', r: 25, err: '' }, dlMsg: '' };
+  rangeMapRef = React.createRef();
   store = {};
   yearGrid = {};  // archived year grids for the globe, keyed 'year|source'
   _yg = {};       // year grids being fetched
@@ -95,7 +116,7 @@ export default class FireLens extends React.Component {
     CLUSTERS.forEach(([lo, la, sl, sa, n]) => { for (let i = 0; i < n; i++) { const lon = lo + gauss() * sl, lat = la + gauss() * sa; this.fires.push({ lon, lat, lr: lon * D, sl: Math.sin(lat * D), cl: Math.cos(lat * D), t: rnd(), small: rnd() < .45, inten: Math.pow(rnd(), 2.2) }); } });
     const sp = document.createElement('canvas'); sp.width = sp.height = 64; const sx = sp.getContext('2d');
     const g = sx.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,240,190,1)'); g.addColorStop(.15, 'rgba(255,170,60,.9)'); g.addColorStop(.4, 'rgba(255,80,20,.35)'); g.addColorStop(1, 'rgba(255,40,0,0)'); sx.fillStyle = g; sx.fillRect(0, 0, 64, 64); this.sprite = sp;
-    this.ro = new ResizeObserver(() => this.resize()); if (this.globeRef.current) this.ro.observe(this.globeRef.current); if (this.mapRef.current) this.ro.observe(this.mapRef.current);
+    this.ro = new ResizeObserver(() => { this.resize(); if (this.state.page === 'range') this.paintRangeMap(); }); if (this.globeRef.current) this.ro.observe(this.globeRef.current); if (this.mapRef.current) this.ro.observe(this.mapRef.current);
     this._ps = { ...this.state }; this._pp = { ...this.props };
     this.indexP = REPORTS_URL ? fetch(REPORTS_URL + '/index.json', { cache: 'no-cache' }).then(r => r.json()).then(d => ({ through: d.through, countries: d.countries, slugs: new Set(d.reports.map(x => x.slug)), countrySlugs: new Set(d.reports.filter(x => x.country).map(x => x.slug)) })).then(ix => { this.reportIndex = ix; return ix; }).catch(() => null) : null;
     this.resize(); this.loadLand(); this.fetchRegion(this.state.region); this.fetchGlobal();
@@ -123,6 +144,10 @@ export default class FireLens extends React.Component {
     if (s.year !== ps.year || s.source !== ps.source) this.fetchYearGrid();
     if (s.region !== ps.region || pp.autoRotate !== this.props.autoRotate) this.focusGlobe(1600);
     if (s.page !== ps.page && s.page === 'home') setTimeout(() => this.sizeGlobe(true), 30);
+    if (s.page === 'range') {
+      if (s.page !== ps.page || s.region !== ps.region || s.rangeFrom !== ps.rangeFrom || s.rangeTo !== ps.rangeTo) this.fetchRange();
+      this.paintRangeMap();
+    }
   }
 
   resize() {
@@ -335,6 +360,13 @@ export default class FireLens extends React.Component {
   }
   async searchPlace(q) {
     q = (q || '').trim(); if (!q) return;
+    // Coordinates typed into the search: "lat, lon" (a circle of the chosen radius) or "west, south, east, north".
+    const nums = q.split(/[\s,;]+/).filter(Boolean).map(Number);
+    if ((nums.length === 2 || nums.length === 4) && nums.every(Number.isFinite)) {
+      const err = nums.length === 2 ? this.goCoords(nums[0], nums[1], this.state.coord.r) : this.goBox(...nums);
+      this.setState({ searchMsg: err || 'Showing ' + this.state.region, searchErr: !!err });
+      return;
+    }
     const hit = ORDER.find(n => n.toLowerCase() === q.toLowerCase()) || Object.keys(REG).find(n => n.toLowerCase() === q.toLowerCase());
     if (hit) { this.setRegion(hit); this.setState({ searchMsg: '' }); return; }
     this.setState({ searchMsg: 'Searching “' + q + '”…', searchErr: false });
@@ -360,6 +392,358 @@ export default class FireLens extends React.Component {
     this.aoiGeo = this.aoiGeo || {}; this.aoiGeo[c.name] = c.geometry;
     this.setRegion(c.name); this.setState({ searchMsg: 'Showing ' + c.name + ' — fetching hotspots for this country', searchErr: false });
   }
+  // ── areas from coordinates ───────────────────────────────────────────────────
+  goCoords(lat, lon, km) {
+    if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) return 'Latitude must be between -90 and 90 and longitude between -180 and 180 (decimal degrees).';
+    km = Math.max(1, Math.min(500, +km || 25));
+    const dLat = km / 111.32, dLon = km / (111.32 * Math.max(0.05, Math.cos(lat * D)));
+    const hemi = (v, p, n) => Math.abs(v).toFixed(2) + '°' + (v >= 0 ? p : n);
+    const name = hemi(lat, 'N', 'S') + ' ' + hemi(lon, 'E', 'W') + ' · ' + km + ' km';
+    const bb = { west: Math.max(-180, lon - dLon), south: Math.max(-90, lat - dLat), east: Math.min(180, lon + dLon), north: Math.min(90, lat + dLat) };
+    this.makeRegion(name, lat, lon, bb, 'Within ' + km + ' km of ' + lat.toFixed(3) + ', ' + lon.toFixed(3));
+    REG[name].span = Math.max(1, dLon * 5);
+    // A true circle, so "within 25 km" means 25 km (cells and hotspots outside it are left out).
+    const ring = Array.from({ length: 49 }, (_, i) => { const a = i / 48 * 2 * Math.PI; return [+(lon + dLon * Math.cos(a)).toFixed(5), +(lat + dLat * Math.sin(a)).toFixed(5)]; });
+    this.aoiGeo = this.aoiGeo || {}; this.aoiGeo[name] = { type: 'Polygon', coordinates: [ring] };
+    if (this.store[name]) delete this.store[name];
+    this.setRegion(name);
+    return '';
+  }
+  goBox(w, s, e, n) {
+    if (!(Math.abs(s) <= 90 && Math.abs(n) <= 90 && Math.abs(w) <= 180 && Math.abs(e) <= 180) || s >= n) return 'A box is west, south, east, north in decimal degrees, with south below north.';
+    const name = 'Box ' + [w, s, e, n].map(x => (+x).toFixed(2)).join(', ');
+    this.makeRegion(name, (s + n) / 2, w <= e ? (w + e) / 2 : ((w + e + 360) / 2) % 360 - 180, { west: w, south: s, east: e, north: n }, 'Entered bounding box');
+    if (this.store[name]) delete this.store[name];
+    this.setRegion(name);
+    return '';
+  }
+  coordVals() {
+    const c = this.state.coord, set = patch => this.setState(s => ({ coord: { ...s.coord, err: '', ...patch } }));
+    return { open: c.open, lat: c.lat, lon: c.lon, r: c.r, err: c.err,
+      toggle: () => set({ open: !c.open }), onLat: ev => set({ lat: ev.target.value }), onLon: ev => set({ lon: ev.target.value }), onR: ev => set({ r: +ev.target.value }),
+      go: ev => {
+        ev.preventDefault();
+        const lat = parseFloat(String(c.lat).replace(',', '.')), lon = parseFloat(String(c.lon).replace(',', '.'));
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) { set({ err: 'Enter both latitude and longitude as decimal numbers, e.g. -29.16 and -67.50.' }); return; }
+        const err = this.goCoords(lat, lon, c.r);
+        set({ err });
+        if (!err && this.state.page === 'home') setTimeout(() => { const el = document.getElementById('explore'); if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 80, behavior: 'smooth' }); }, 80);
+      } };
+  }
+
+  // ── date range: harmonized analytics + individual hotspots ──────────────────
+  aoiBody(region) { const R = REG[region], bbox = BBOX[region] || null, geo = this.aoiGeo && this.aoiGeo[region]; return bbox ? { bbox, ...(geo && !R.country ? { geometry: geo } : {}) } : null; }
+  rangeQuery(region) { const st = this.state, R = REG[region]; return 'start=' + st.rangeFrom + '&end=' + st.rangeTo + (R && R.country ? '&country=' + encodeURIComponent(R.country) : ''); }
+  rangeEntry(region = this.state.region) { const cur = this.store[region]; return (cur && cur.range && cur.range[this.state.rangeFrom + '|' + this.state.rangeTo]) || null; }
+  fetchRange(region = this.state.region) {
+    const st = this.state, R = REG[region];
+    if (!(this.props.useLiveApi ?? true) || !R || !st.rangeFrom || !st.rangeTo || st.rangeFrom > st.rangeTo) return;
+    const cur = this.store[region] || (this.store[region] = {}); cur.range = cur.range || {};
+    const k = st.rangeFrom + '|' + st.rangeTo, old = cur.range[k];
+    // Reuse a result unless it failed, or it includes the last two days and is over 30 minutes old (new passes arrive).
+    if (old && (old.loading || (!old.failed && (st.rangeTo < addDays(todayUTC(), -2) || Date.now() - old.at < 30 * 60e3)))) return;
+    const ent = cur.range[k] = { loading: true, at: Date.now() }, body = this.aoiBody(region), qs = this.rangeQuery(region), days = dayDiff(st.rangeFrom, st.rangeTo) + 1;
+    const tick = () => this.setState(s => ({ apiTick: s.apiTick + 1 }));
+    if (region !== 'Global' && !body) { ent.loading = false; ent.statsErr = 'This area has no bounds to search.'; tick(); return; }
+    const why = e => (e && e.message && !/abort/i.test(e.message) ? e.message : 'No answer in time — try a shorter range or a smaller area.');
+    const pS = this.api('/calendar/range?' + qs + '&aoi_name=' + encodeURIComponent(region), body, 'POST', 60000).then(d => { ent.stats = d; }, e => { ent.statsErr = why(e); ent.failed = true; });
+    let pH = Promise.resolve();
+    if (region === 'Global') ent.hotErr = 'Individual hotspots are listed for a country or a smaller area — the whole planet has tens of thousands every day.';
+    else if (days > HOT_MAX_DAYS) ent.hotErr = 'Individual hotspots and the day-by-day view cover up to ' + HOT_MAX_DAYS + ' days — shorten the range to see them. The harmonized analytics cover any range.';
+    else pH = this.api('/hotspots/search?' + qs, body, 'POST', 150000).then(d => { ent.hot = d; }, e => { ent.hotErr = why(e); ent.failed = true; });
+    // Under a week the weekly record cannot say what happened on those days, so the years are compared from real detections.
+    let pY = Promise.resolve();
+    if (region !== 'Global' && days <= HISTORY_MAX_DAYS) { ent.histLoading = true; pY = this.api('/hotspots/history?' + qs, body, 'POST', 240000).then(d => { ent.hist = d; }, e => { ent.histErr = why(e); }).finally(() => { ent.histLoading = false; this._rfk = null; tick(); }); }
+    const show = () => { this._rfk = null; tick(); };  // each result appears as soon as it arrives
+    pS.then(show); pH.then(show); pY.then(show);
+    Promise.allSettled([pS, pH]).then(() => { ent.loading = false; this._rk = null; tick(); });
+    tick();
+  }
+  setRange(from, to) {
+    if (!from || !to) return;
+    if (from > to) [from, to] = [to, from];
+    this.setState({ rangeFrom: from, rangeTo: to, dlMsg: '' }, () => this.fetchRange());
+  }
+  // The same-dates comparison: real detections for short ranges, the harmonized record otherwise.
+  rangeCompare() {
+    const st = this.state, ent = this.rangeEntry() || {}, s = ent.stats;
+    if (ent.hist) return { S: ent.hist, start: ent.hist.start, end: ent.hist.end, real: true, value: ent.hist.selected };
+    if (s && s.same_dates) return { S: s.same_dates, start: s.start, end: s.end, real: false, value: s.harmonized };
+    return { S: null, start: st.rangeFrom, end: st.rangeTo, real: false, value: null };
+  }
+  rangeFigures() {
+    const st = this.state, ent = this.rangeEntry(), s = ent && ent.stats, h = ent && ent.hot, region = st.region;
+    const k = [region, st.rangeFrom, st.rangeTo, !!s, !!h, !!(ent && ent.hist)].join('|');
+    if (this._rfk === k) return this._rf;
+    const src = 'Source: NASA FIRMS — MODIS C6.1 and VIIRS 375 m active fire products, harmonized by FireLens to MODIS-equivalent detections.';
+    const span = dLabel(st.rangeFrom) + ' – ' + dLabel(st.rangeTo);
+    let sd = null, daily = null;
+    const C = this.rangeCompare(), S = C.S;
+    if (S && !(ent.histLoading && !C.real)) {
+      const yrs = S.years, sel = yrs.findIndex(y => y.year === +C.end.slice(0, 4)), md = iso => dLabel(iso).replace(/, \d{4}$/, '');
+      sd = svgBars({ title: 'The same dates in every year · ' + region, subtitle: (C.real ? 'Real detections converted to MODIS-equivalent, ' : 'Harmonized hotspots, ') + (C.start === C.end ? md(C.start) : md(C.start) + ' – ' + md(C.end)) + ' of each year · orange = ' + C.end.slice(0, 4),
+        labels: yrs.map(y => String(y.year)), values: yrs.map(y => y.harmonized), highlight: sel, median: S.median, p25: S.p25, p75: S.p75, unit: 'MODIS-equivalent hotspots', source: src });
+    }
+    if (h) {
+      daily = svgDaily({ title: 'Hotspots per day · ' + region, subtitle: span + ' · stacked: raw detections per satellite · line: harmonized estimate',
+        days: h.daily.map(d => d.date), series: h.sensors.map(sn => ({ name: SENSOR_NAME[sn] || sn, color: SENSOR_COL[sn] || '#ccc', values: h.daily.map(d => d[sn.toLowerCase()] || 0) })),
+        line: { name: 'Harmonized (MODIS-eq.)', color: '#ffffff', values: h.daily.map(d => d.harmonized) }, source: 'Source: NASA FIRMS (standard products where available, near-real-time after). ' + h.conversion.method });
+    }
+    this._rfk = k; this._rf = { sd, daily, src, span };
+    return this._rf;
+  }
+  paintRangeMap(force) {
+    const c = this.rangeMapRef.current; if (!c) return;
+    const ent = this.rangeEntry(), W = c.clientWidth, H = c.clientHeight; if (!W || !H) return;
+    const k = [this.state.region, this.state.rangeFrom, this.state.rangeTo, !!(ent && ent.hot), !!this.landCanvas, W, H].join('|');
+    if (!force && this._rk === k) return; this._rk = k;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2); c.width = W * dpr; c.height = H * dpr;
+    const x = c.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.drawRangeMap(x, W, H);
+  }
+  drawRangeMap(ctx, W, H) {
+    const region = this.state.region, ent = this.rangeEntry(), h = ent && ent.hot;
+    const bb = BBOX[region] || { west: -180, south: -60, east: 180, north: 80 };
+    let w = bb.west, e = bb.east < bb.west ? bb.east + 360 : bb.east, s = bb.south, n = bb.north;
+    const px0 = (e - w) * .08 + .03, py0 = (n - s) * .08 + .03; w -= px0; e += px0; s -= py0; n += py0;
+    const kx = Math.max(.2, Math.cos(((s + n) / 2) * D)), sc = Math.min(H / (n - s), W / ((e - w) * kx)), cx = (w + e) / 2, cy = (s + n) / 2;
+    const X = lon => W / 2 + ((lon < w - 1 ? lon + 360 : lon) - cx) * kx * sc, Y = lat => H / 2 - (lat - cy) * sc;
+    ctx.fillStyle = '#050a14'; ctx.fillRect(0, 0, W, H);
+    const lon0 = cx - W / 2 / (kx * sc), lon1 = cx + W / 2 / (kx * sc), lat1 = cy + H / 2 / sc, lat0 = cy - H / 2 / sc;
+    if (this.landCanvas) ctx.drawImage(this.landCanvas, (lon0 + 180) * 4, (90 - lat1) * 4, (lon1 - lon0) * 4, (lat1 - lat0) * 4, 0, 0, W, H);
+    const geo = this.aoiGeo && this.aoiGeo[region];
+    ctx.strokeStyle = 'rgba(255,178,122,.9)'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.beginPath();
+    const rings = geo ? (geo.type === 'Polygon' ? geo.coordinates : geo.coordinates.flat()) : [[[bb.west, bb.south], [bb.east, bb.south], [bb.east, bb.north], [bb.west, bb.north], [bb.west, bb.south]]];
+    rings.forEach(r => r.forEach(([lo, la], i) => (i ? ctx.lineTo(X(lo), Y(la)) : ctx.moveTo(X(lo), Y(la)))));
+    ctx.stroke(); ctx.setLineDash([]);
+    if (h && h.points.length) {
+      for (let i = h.points.length - 1; i >= 0; i--) {  // weakest first, so the strongest fires are drawn on top
+        const [la, lo, , sn, frp] = h.points[i], r = 1.8 + Math.min(8, Math.log10(1 + frp) * 2.4);
+        ctx.globalAlpha = .8; ctx.fillStyle = SENSOR_COL[sn] || '#fff'; ctx.beginPath(); ctx.arc(X(lo), Y(la), r, 0, 7); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+  async rangeMapPng() {
+    const W = 1200, H = 900, top = 76, bot = 58, c = document.createElement('canvas'); c.width = W; c.height = H + top + bot;
+    const x = c.getContext('2d'), st = this.state, h = (this.rangeEntry() || {}).hot;
+    x.fillStyle = '#0b1020'; x.fillRect(0, 0, c.width, c.height);
+    x.save(); x.translate(0, top); this.drawRangeMap(x, W, H); x.restore();
+    x.fillStyle = '#e8eefb'; x.font = 'bold 22px Helvetica, Arial, sans-serif'; x.fillText('Hotspots detected · ' + st.region, 28, 38);
+    x.fillStyle = '#9fb0cc'; x.font = '14px Helvetica, Arial, sans-serif';
+    x.fillText(dLabel(st.rangeFrom) + ' – ' + dLabel(st.rangeTo) + (h ? ' · ' + fmt(h.detections) + ' detections' + (h.points_shown < h.detections ? ' (strongest ' + fmt(h.points_shown) + ' shown)' : '') : '') + ' · dot size = fire radiative power', 28, 62);
+    let lx = 28; x.font = '13px Helvetica, Arial, sans-serif';
+    (h ? h.sensors : []).forEach(sn => { x.fillStyle = SENSOR_COL[sn]; x.beginPath(); x.arc(lx + 6, top + H + 24, 6, 0, 7); x.fill(); x.fillStyle = '#c8d3e8'; x.fillText(SENSOR_NAME[sn], lx + 18, top + H + 29); lx += 34 + x.measureText(SENSOR_NAME[sn]).width; });
+    x.fillStyle = '#9fb0cc'; x.textAlign = 'right'; x.fillText('Source: NASA FIRMS · FireLens · firelens.tech', W - 28, top + H + 29);
+    return canvasToPng(c);
+  }
+  async fetchBlob(path, body) {
+    const r = await fetch((this.props.apiBase ?? API_BASE) + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? null) });
+    if (!r.ok) { let d = ''; try { d = (await r.json()).detail; } catch (_) { /* not JSON */ } throw new Error(d || 'HTTP ' + r.status); }
+    return r.blob();
+  }
+  rangeCsvs() {
+    const st = this.state, ent = this.rangeEntry() || {}, s = ent.stats, h = ent.hot, out = {};
+    if (h) out['daily-hotspots.csv'] = toCsv([['date', ...h.sensors.map(x => x.toLowerCase() + '_detections'), 'used_in_record', 'harmonized_modis_eq', 'frp_mw'], ...h.daily.map(d => [d.date, ...h.sensors.map(x => d[x.toLowerCase()] || 0), d.used, d.harmonized, d.frp_mw])]);
+    const C = this.rangeCompare();
+    if (C.S) out['same-dates-by-year.csv'] = toCsv([['year', 'window_start', 'window_end', 'harmonized_modis_eq', 'selected', 'median_2003_2025', 'basis'], ...C.S.years.map(y => { const k = y.year - +C.end.slice(0, 4); const sh = iso => (+iso.slice(0, 4) + k) + iso.slice(4); return [y.year, sh(C.start), sh(C.end), y.harmonized, y.year === +C.end.slice(0, 4) ? 'yes' : '', C.S.median, C.real ? 'real detections' : 'harmonized weekly record']; })]);
+    if (s && s.weekly) out['weekly-in-range.csv'] = toCsv([['year', 'week', 'week_start', 'harmonized_modis_eq', 'modis_raw', 'viirs_snpp_raw', 'percentile_vs_2003_2025'], ...s.weekly.map(w => [w.year, w.week, w.week_start, w.harmonized, w.modis_raw, w.viirs_raw, w.percentile])]);
+    return out;
+  }
+  rangeReadme() {
+    const st = this.state, ent = this.rangeEntry() || {}, s = ent.stats, h = ent.hot, bb = BBOX[st.region];
+    return ['FireLens — date-range export', '', 'Area: ' + st.region + (bb ? ' (bbox W ' + bb.west.toFixed(3) + ', S ' + bb.south.toFixed(3) + ', E ' + bb.east.toFixed(3) + ', N ' + bb.north.toFixed(3) + ')' : ''),
+      'Dates: ' + st.rangeFrom + ' to ' + st.rangeTo + ' (UTC, inclusive)', 'Generated: ' + new Date().toISOString(), '',
+      'Files', '  hotspots.csv            every NASA FIRMS detection in the area and dates, one row per detection',
+      '  daily-hotspots.csv      detections per day and satellite, detections used by the harmonized record, harmonized estimate, FRP',
+      '  same-dates-by-year.csv  harmonized hotspots over the same calendar dates in every year since 2000',
+      '  weekly-in-range.csv     the harmonized weekly record inside the range, with percentiles vs 2003-2025',
+      '  *.png                   the charts and map shown in FireLens', '',
+      'Harmonized = MODIS-equivalent detections: MODIS (Terra/Aqua, 1 km) before 2012; from 2012 VIIRS S-NPP (375 m) converted by a',
+      'gradient-boosted model calibrated on the years both sensors flew, with NOAA-20 filling S-NPP gaps. hotspots.csv columns:',
+      '  used_in_record     passes the archive cleaning rules (vegetation fires, MODIS confidence >= 30%, VIIRS nominal/high)',
+      '  harmonized_weight  the detection\'s contribution to the MODIS-equivalent record' + (h ? ' (' + h.conversion.method + ')' : ''), '',
+      s && s.end_clipped_to ? 'Note: the harmonized record runs to ' + s.end_clipped_to + '; later days appear only in the hotspot files.\n' : '',
+      h && h.truncated ? 'Note: this search holds more than ' + h.max_rows.toLocaleString('en-US') + ' detections, so the hotspot files stop at ' + h.complete_through + ', not ' + h.end + '.\n' : '',
+      'Sources: NASA FIRMS (https://firms.modaps.eosdis.nasa.gov) — MODIS C6.1 and VIIRS C2 active fire products; FireLens (https://firelens.tech).'].join('\n');
+  }
+  async rangeDownload(kind) {
+    const st = this.state, region = st.region, ent = this.rangeEntry() || {}, tag = region.replace(/[^\w-]+/g, '_') + '_' + st.rangeFrom + '_' + st.rangeTo, f = this.rangeFigures();
+    const say = m => this.setState({ dlMsg: m });
+    const hotCsv = () => this.fetchBlob('/hotspots/csv?' + this.rangeQuery(region) + '&aoi_name=' + encodeURIComponent(region), this.aoiBody(region));
+    try {
+      if (kind === 'hot') { say('Preparing the hotspot CSV…'); saveBlob('firelens-hotspots-' + tag + '.csv', await hotCsv()); say(''); return; }
+      if (kind === 'daily' || kind === 'years') { const name = kind === 'daily' ? 'daily-hotspots.csv' : 'same-dates-by-year.csv', t = this.rangeCsvs()[name]; if (t) saveBlob('firelens-' + name.replace('.csv', '') + '-' + tag + '.csv', new Blob([t], { type: 'text/csv' })); return; }
+      if (kind === 'sdpng' && f.sd) { saveBlob('firelens-same-dates-' + tag + '.png', await svgToPng(f.sd)); return; }
+      if (kind === 'dailypng' && f.daily) { saveBlob('firelens-daily-' + tag + '.png', await svgToPng(f.daily)); return; }
+      if (kind === 'map') { saveBlob('firelens-map-' + tag + '.png', await this.rangeMapPng()); return; }
+      if (kind === 'zip') {
+        say('Building the ZIP…');
+        const files = [{ name: 'README.txt', data: this.rangeReadme() }];
+        Object.entries(this.rangeCsvs()).forEach(([name, data]) => files.push({ name, data }));
+        if (ent.hot) { try { files.push({ name: 'hotspots.csv', data: await hotCsv() }); } catch (err) { files.push({ name: 'hotspots-ERROR.txt', data: String(err.message || err) }); } }
+        if (f.sd) files.push({ name: 'same-dates-by-year.png', data: await svgToPng(f.sd) });
+        if (f.daily) files.push({ name: 'daily-hotspots.png', data: await svgToPng(f.daily) });
+        if (ent.hot) files.push({ name: 'hotspot-map.png', data: await this.rangeMapPng() });
+        const vm = this.vm(region); if (vm) files.push({ name: 'burning-calendar.png', data: await svgToPng(this.calendarSvg()) });
+        saveBlob('firelens-' + tag + '.zip', await makeZip(files)); say('');
+      }
+    } catch (err) { say('Download failed: ' + (err.message || err)); }
+  }
+  rangeVals() {
+    const st = this.state, region = st.region, ent = this.rangeEntry() || {}, s = ent.stats, h = ent.hot, f = this.rangeFigures();
+    const today = todayUTC(), from = st.rangeFrom, to = st.rangeTo, days = dayDiff(from, to) + 1, vm = this.vm(region);
+    const ms = today.slice(0, 8) + '01', lme = addDays(ms, -1), lms = lme.slice(0, 8) + '01', y = +today.slice(0, 4);
+    const presets = [['Today', today, today], ['Last 7 days', addDays(today, -6), today], ['Last 30 days', addDays(today, -29), today], ['This month', ms, today], ['Last month', lms, lme], ['Last 12 months', addDays(today, -364), today]];
+    const cp = vm && region !== 'Global' && vm.r.baseline.critical_period;
+    if (cp) {
+      const wk = (yy, w, end) => addDays(yy + '-01-01', (w - 1) * 7 + (end ? 6 : 0)), wrap = cp.end_week < cp.start_week;
+      let a = wk(wrap ? y - 1 : y, cp.start_week), b = wk(y, cp.end_week, true);
+      if (a > today) { a = wk(wrap ? y - 2 : y - 1, cp.start_week); b = wk(y - 1, cp.end_week, true); }
+      presets.push(['Critical period ' + b.slice(0, 4), a, b > today ? today : b]);
+    }
+    const C = this.rangeCompare(), S = C.S, short = days <= HISTORY_MAX_DAYS, waiting = short && ent.histLoading && !C.real;
+    const SS = waiting ? null : S, cy = +C.end.slice(0, 4), sel = SS && SS.years.find(yy => yy.year === cy);
+    const xm = SS ? SS.x_median : null, cut = h && h.truncated, busiest = h && h.daily.reduce((m, d) => (d.used > (m ? m.used : 0) ? d : m), null);
+    // Short ranges use real detections; the weekly record can only give a week's average rate for them.
+    const realDays = C.real || (short && region !== 'Global' && !ent.histErr && !!h && !cut);
+    const val = C.real ? C.value : realDays ? h.harmonized : s && s.available ? s.harmonized : null;
+    const hasToday = to >= today, plus = cut ? '+' : '', upTo = cut ? ' to ' + dLabel(h.complete_through) : '';
+    const tiles = [
+      { k: 'HARMONIZED HOTSPOTS', v: val != null ? fmt(val) : ent.loading ? '…' : '—', d: 'MODIS-equivalent · ' + (realDays ? 'from real detections' : short && val != null ? 'weekly average rate' + (region === 'Global' ? ' — pick a country for real daily counts' : '') : s && s.available ? s.days + ' days' + (s.end_clipped_to ? ' (record to ' + dLabel(s.end_clipped_to) + ')' : '') : 'harmonized record') },
+      { k: 'VS. MEDIAN · SAME DATES', v: xm != null ? (xm >= 1 ? xm.toFixed(1) + '×' : '↓ ' + Math.round((1 - xm) * 100) + '%') : SS ? 'Normally ~' + fmt(SS.median) : waiting ? '…' : '—', d: SS ? (xm != null ? 'median ' + fmt(SS.median) + ' in 2003–2025' : 'median for these dates, 2003–2025') : waiting ? 'reading every year…' : days > 366 ? 'ranges up to one year' : 'not available', color: xm != null ? upColor(xm - 1) : undefined },
+      { k: 'RANK AMONG YEARS', v: SS && SS.rank ? '#' + SS.rank : waiting ? '…' : '—', d: SS && SS.rank ? 'of ' + SS.of_years + ' years' + (SS.rank === 1 ? ' — highest on record' : '') + ' (1 = most fire)' : 'same dates, 2000–' + CUR_YEAR },
+      { k: 'HOTSPOTS DETECTED', v: h ? fmt(h.detections) + plus : ent.loading && !ent.hotErr ? '…' : '—', d: h ? h.sensors.map(sn => (SENSOR_NAME[sn] || sn).replace(' (Terra/Aqua)', '') + ' ' + fmt(h.by_sensor[sn] || 0)).join(' · ') + upTo : 'raw NASA FIRMS detections' },
+      { k: 'FIRE ENERGY (FRP)', v: h ? fmtMW(h.frp_mw) + plus : '—', d: h ? 'strongest single fire ' + fmtMW(h.max_frp_mw) + upTo : 'summed fire radiative power' },
+    ];
+    let plain = '';
+    if (val != null) {
+      const when = from === to ? 'On ' + dLabel(from) : 'From ' + dLabel(realDays ? from : s.start) + ' to ' + dLabel(realDays ? to : s.end);
+      plain = when + ', ' + region + ' had ' + fmt(val) + ' harmonized hotspots';
+      if (SS && xm != null) plain += ' — ' + (xm >= 1.05 ? xm.toFixed(1) + '× ' : xm <= .95 ? Math.round((1 - xm) * 100) + '% below ' : 'about ') + 'the 2003–2025 median for the same dates (' + fmt(SS.median) + ')' + (SS.rank ? ', the ' + ord(SS.rank) + ' highest of ' + SS.of_years + ' years' : '');
+      else if (SS && SS.rank) plain += '; these dates normally have about ' + fmt(SS.median) + ', and this is the ' + ord(SS.rank) + ' highest of ' + SS.of_years + ' years';
+      plain += '.';
+      if (h) plain += ' NASA FIRMS reported ' + fmt(h.detections) + plus + ' individual detections' + upTo + (busiest && days > 1 ? '; the busiest day was ' + dLabel(busiest.date) + ' with ' + fmt(busiest.used) + '.' : '.');
+      if (SS && sel) { const top = SS.years.filter(yy => yy.harmonized != null).sort((a, b) => b.harmonized - a.harmonized)[0]; if (top && top.year !== sel.year) plain += ' The same dates burned most in ' + top.year + ' (' + fmt(top.harmonized) + ').'; }
+      if (hasToday) plain += ' Today’s satellite passes are still arriving.';
+    }
+    const err = [ent.statsErr && 'Harmonized analytics: ' + ent.statsErr, ent.hotErr && (h ? '' : ent.hotErr), ent.histErr && 'Same-day history: ' + ent.histErr + ' Showing the weekly record instead.'].filter(Boolean).join(' ');
+    const noHot = !h;
+    const dl = (title, sub, kind, ok, primary) => ({ title, sub, disabled: !ok, primary, onClick: () => ok && this.rangeDownload(kind) });
+    return {
+      from, to, minDate: '2000-11-01', maxDate: today,
+      onFrom: ev => this.setRange(ev.target.value, st.rangeTo > ev.target.value ? st.rangeTo : ev.target.value),
+      onTo: ev => this.setRange(st.rangeFrom < ev.target.value ? st.rangeFrom : ev.target.value, ev.target.value),
+      presets: presets.map(([label, a, b]) => ({ label, on: a === from && b === to, onClick: () => this.setRange(a, b) })),
+      regionName: region, span: days === 1 ? dLabel(from) + ' (one day)' : dLabel(from) + ' – ' + dLabel(to) + ' · ' + days + ' days',
+      help: 'Pick the area on the map, by search or by coordinates. Any range works for the harmonized analytics; individual hotspots cover up to ' + HOT_MAX_DAYS + ' days.',
+      co: this.coordVals(),
+      msg: ent.histLoading ? 'Reading these dates in every year since 2000 from NASA FIRMS — this can take up to a minute or two for a large area…' : ent.loading ? 'Loading NASA FIRMS data for these dates…' : err, msgColor: ent.loading || ent.histLoading ? '#9fb0cc' : '#ffa53a',
+      warn: cut ? 'This search holds more than ' + fmt(h.max_rows) + ' detections, so individual hotspots stop at ' + dLabel(h.complete_through) + ' instead of ' + dLabel(h.end) + ' — on the map, the daily chart and the downloads. The harmonized totals still cover the full range. For the later dates, start the range after ' + dLabel(h.complete_through) + ' or choose a smaller area.' : '',
+      tiles, plain,
+      sdSvg: f.sd, sdEmpty: ent.loading || waiting ? 'Loading…' : short && !C.S ? (ent.histErr || 'Pick a country or a smaller area to compare single days between years.') : s && s.available === false ? s.reason : 'Pick a range of up to one year to compare it with the same dates in every other year.',
+      dailySvg: f.daily, dailyEmpty: ent.loading && !ent.hotErr ? 'Loading hotspots…' : ent.hotErr || 'No hotspot data.',
+      dailyNote: 'Stacked bars: raw detections per satellite. Line: the harmonized estimate, so different sensors count the same. Single days are noisy (overpass timing, cloud) — the calendar is the reliable trend.',
+      mapRef: this.rangeMapRef, hasPoints: !!(h && h.points.length), mapEmpty: ent.loading && !ent.hotErr ? 'Loading hotspots…' : h ? 'No hotspots were detected in this area and range.' : ent.hotErr || '',
+      mapNote: h ? (h.points_shown < h.detections ? 'strongest ' + fmt(h.points_shown) + ' of ' + fmt(h.detections) : fmt(h.detections) + ' detections') : '',
+      sensorKey: (h ? h.sensors : ['MODIS', 'VIIRS_SNPP', 'VIIRS_NOAA20']).map(sn => ({ name: SENSOR_NAME[sn], color: SENSOR_COL[sn] })),
+      downloads: [
+        dl('Everything · ZIP', ent.loading || ent.histLoading ? 'Available once the data above has loaded' : 'CSV tables, charts, map and a README', 'zip', !ent.loading && !ent.histLoading && !!(s || h), true),
+        dl('Hotspots · CSV', 'every detection: sensor, position, time, FRP, confidence, harmonized weight', 'hot', !noHot),
+        dl('Daily table · CSV', 'detections per day and satellite + harmonized', 'daily', !noHot),
+        dl('Same dates by year · CSV', 'harmonized total for these dates, 2000–' + CUR_YEAR, 'years', !!SS),
+        dl('Year comparison · PNG', 'the chart above, high resolution', 'sdpng', !!f.sd),
+        dl('Daily chart · PNG', 'detections per day by sensor', 'dailypng', !!f.daily),
+        dl('Hotspot map · PNG', 'the map, with legend and source', 'map', !noHot),
+      ],
+      dlMsg: st.dlMsg,
+      method: 'Ranges of a week or less are compared between years from real detections. Longer ranges use the harmonized weekly record (MODIS before 2012, VIIRS converted to MODIS-equivalent from 2012, baseline 2003–2025), with partly covered weeks at each end counted in proportion. Hotspots come straight from NASA FIRMS — standard science products where available, near-real-time after' + (h ? ' — and each carries its contribution to the harmonized record. ' + h.conversion.method + '.' : '.'),
+    };
+  }
+
+  // ── month statistics (median comparisons and rankings) ──────────────────────
+  monthVals() {
+    const st = this.state, vm = this.vm(st.region), ms = vm && vm.r.month_stats;
+    if (!ms) return { has: false };
+    const xs = c => c.x_median == null ? fmt(c.value) : c.x_median >= 1 ? c.x_median.toFixed(1) + '×' : '↓ ' + Math.round((1 - c.x_median) * 100) + '%';
+    const tile = (k, c) => c && { k, v: xs(c), d: (c.x_median == null ? 'few fires normally · ' : fmt(c.value) + ' vs ') + 'median ' + fmt(c.median) + ' · #' + c.rank + ' of ' + c.of_years + ' years', color: c.x_median == null ? '#fff' : upColor(c.x_median - 1) };
+    const cm = ms.current_month, lm = ms.last_full_month, yt = ms.year_to_date;
+    const mx = Math.max(1, ...ms.climatology.map(c => c.median || 0)), top3 = ms.busiest_months.slice(0, 3);
+    const share = ms.climatology.filter(c => top3.includes(c.month)).reduce((a, c) => a + (c.share_pct || 0), 0);
+    const lastDay = (yy, mm) => new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+    const pad = n => String(n).padStart(2, '0');
+    return {
+      has: true, note: 'harmonized · baseline 2003–2025 · data to ' + dLabel(ms.data_end),
+      cur: cm && tile('THIS MONTH · ' + cm.name + ' 1–' + +cm.through.slice(8, 10), cm), last: tile('LAST FULL MONTH · ' + lm.name + ' ' + lm.year, lm),
+      ytd: yt && yt.median != null ? { k: 'YEAR TO DATE · ' + yt.year, v: yt.delta_vs_median_pct == null ? fmt(yt.value) : pctTxt(yt.delta_vs_median_pct), d: fmt(yt.value) + ' vs median ' + fmt(yt.median) + ' · #' + yt.rank + ' of ' + yt.of_years + ' years', color: upColor(yt.delta_vs_median_pct) } : null,
+      clim: ms.climatology.map(c => ({ m: c.name.slice(0, 1), h: ((c.median || 0) / mx * 100) + '%', top: top3.includes(c.month), title: c.name + ': median ' + fmt(c.median || 0) + ' (25th–75th: ' + fmt(c.p25 || 0) + '–' + fmt(c.p75 || 0) + ')' })),
+      busiest: 'Busiest months: ' + top3.map(m => MON[m - 1]).join(', ') + ' — ' + Math.round(share) + '% of a typical year’s burning.',
+      topYears: ms.top_years.map(yy => ({ label: String(yy.year), v: fmt(yy.total) + (yy.x_median ? ' · ' + yy.x_median.toFixed(1) + '×' : ''), onClick: () => { this.setState({ year: yy.year }); this.go('calendar'); } })),
+      topMonths: ms.top_months.slice(0, 5).map(m => ({ label: MON[m.month - 1] + ' ' + m.year, v: fmt(m.value) + (m.x_median ? ' · ' + m.x_median.toFixed(1) + '×' : ''), onClick: () => { this.go('range'); this.setRange(m.year + '-' + pad(m.month) + '-01', m.year + '-' + pad(m.month) + '-' + lastDay(m.year, m.month)); } })),
+    };
+  }
+  monthCsv() {
+    const vm = this.vm(this.state.region);
+    return toCsv([['year', 'month', 'harmonized_modis_eq', 'modis_raw', 'viirs_snpp_raw', 'frp_mw', 'complete_month', 'median_2003_2025', 'x_median', 'percentile_vs_same_month'], ...vm.r.monthly.map(m => [m.year, m.month, m.harmonized, m.modis, m.viirs, m.frp_mw, m.complete, m.median, m.x_median, m.percentile])]);
+  }
+
+  // ── figures for download ─────────────────────────────────────────────────────
+  setPalette(p) {
+    if (!PALETTES[p]) return;
+    STOPS = PALETTES[p].stops; this._ck = null;
+    try { localStorage.setItem('fl-palette', p); } catch (_) { /* storage unavailable */ }
+    this.setState({ palette: p });
+  }
+  // The colour scale runs from the area's low end (5th percentile) to its highest value, so that differences show
+  // in places that always burn (the planet never drops near zero) as well as in places with quiet months.
+  calRange() {
+    const st = this.state, vm = this.vm(st.region), monthly = st.calMode === 'monthly', frp = st.calMetric === 'frp';
+    const k = [st.region, st.source, st.calMode, st.calMetric, vm].join('|');
+    if (this._crk === k && this._crv === vm) return this._cr;
+    const key = st.source === 'modis' ? 'modis' : st.source === 'viirs' ? 'viirs' : 'harmonized';
+    let vals;
+    if (monthly && vm.MO) vals = Object.values(vm.MO).flat().filter(e => e && e.complete).map(e => (frp ? e.frp_mw : e[key]));
+    else {
+      const src = frp ? vm.F : st.source === 'modis' ? vm.M : st.source === 'viirs' ? vm.V : vm.H;
+      vals = Object.values(src).flat();
+      if (monthly) vals = vals.filter(x => x != null).map(x => x * 4.3);
+    }
+    vals = vals.filter(x => x != null).sort((a, b) => a - b);
+    this._crk = k; this._crv = vm;
+    this._cr = { lo: vals.length ? vals[Math.floor(vals.length * .05)] : 0, hi: vals.length ? Math.max(1, vals[vals.length - 1]) : 1 };
+    return this._cr;
+  }
+  calScale() {
+    const st = this.state, vm = this.vm(st.region);
+    if (st.calMetric === 'anomaly') return { stops: [[0, [59, 140, 255]], [.5, [44, 52, 72]], [1, [255, 74, 42]]], ticks: ['≤5th', '50th', '≥95th'], lo: 'Quieter than normal', hi: 'More fire than normal' };
+    if (!vm) return { stops: STOPS, ticks: [], lo: 'Low', hi: 'High' };
+    const { lo, hi } = this.calRange();
+    return { stops: STOPS, ticks: logTicks(hi, 5, lo).map((v, i) => (i === 0 && lo > 0 ? '≤' : '') + (st.calMetric === 'frp' ? fmtMW(v).replace(/\.\d+/, '').replace(' ', '') : compactN(v))), lo: 'Low', hi: 'High' };
+  }
+  calendarSvg() {
+    const st = this.state, sc = this.calScale(), monthly = st.calMode === 'monthly', cv = this.critVals();
+    const metric = { count: st.source === 'harmonized' ? 'harmonized hotspots (MODIS-equivalent)' : st.source === 'modis' ? 'MODIS detections (raw)' : 'VIIRS S-NPP detections (raw)', frp: 'fire radiative power (harmonized)', anomaly: 'percentile vs the same weeks of 2003–2025' }[st.calMetric];
+    const rows = this.buildCal().map(r => ({ year: r.full, total: r.total, cells: r.cells.map(c => (c.bg.startsWith('rgba(255,255,255') ? null : { bg: c.bg, txt: c.txt, fg: c.fg })) }));
+    return svgCalendar({ title: 'Burning activity calendar · ' + st.region, subtitle: (monthly ? 'Monthly' : 'Weekly') + ' ' + metric + ' · 2000–' + CUR_YEAR + (st.calMetric === 'anomaly' ? '' : ' · log colour scale') + ' · grey = no sensor data' + (monthly ? ' · * = incomplete' : ''),
+      rows, cols: monthly ? 12 : 52, stops: sc.stops, lo: sc.lo, hi: sc.hi, ticks: sc.ticks, crit: !monthly && cv.hasCrit ? cv.critBand.map(c => (c.startsWith('rgba(255,255,255') ? '#151c2c' : c)) : null,
+      source: 'Source: NASA FIRMS — MODIS C6.1 (1 km) and VIIRS S-NPP (375 m), harmonized by FireLens.' + (cv.hasCrit && !monthly ? ' Top band: critical period (80% of normal burning).' : '') });
+  }
+  trendSvg() {
+    const st = this.state, pts = this.series(st.region) || [];
+    return svgLines({ title: 'Fire activity, monthly · ' + st.region, subtitle: 'Harmonized (one consistent scale) against the raw sensor counts it replaces', startYear: 2000, mark: 12 * 12,
+      series: [{ name: 'Harmonized (MODIS-equivalent)', color: '#ff7a1a', values: pts.map(p => p.harm), width: 2.2 }, { name: 'MODIS raw', color: '#3b8cff', values: pts.map(p => p.modis) }, { name: 'VIIRS S-NPP raw', color: '#ffd04a', values: pts.map(p => p.viirs), dash: '4 3' }],
+      source: 'Source: NASA FIRMS — MODIS C6.1 and VIIRS S-NPP 375 m, harmonized by FireLens.' });
+  }
+  async figureDownload(kind, fmtName) {
+    const st = this.state, vm = this.vm(st.region), tag = st.region.replace(/[^\w-]+/g, '_');
+    if (!vm) { this.setState({ dlMsg: 'Real data for ' + st.region + ' has not loaded yet — nothing to download.' }); return; }
+    const fig = kind === 'calendar' ? this.calendarSvg() : this.trendSvg(), base = 'firelens-' + kind + '-' + tag + (kind === 'calendar' ? '-' + st.calMode + '-' + st.calMetric : '');
+    try {
+      if (fmtName === 'svg') saveBlob(base + '.svg', new Blob([fig.svg], { type: 'image/svg+xml' }));
+      else saveBlob(base + '.png', await svgToPng(fig));
+    } catch (err) { this.setState({ dlMsg: 'Download failed: ' + (err.message || err) }); }
+  }
+
   // ── fire alerts by email ─────────────────────────────────────────────────────
   alertArea() {
     const st = this.state, R = REG[st.region] || {}, a = st.alert;
@@ -474,9 +858,9 @@ export default class FireLens extends React.Component {
 
   setRegion(r) { if (!REG[r]) return; this.setState({ region: r, mapZoom: 1 }); this.fetchRegion(r); }
 
-  async api(path, body, method = 'POST') {
+  async api(path, body, method = 'POST', timeout = 30000) {
     const base = this.props.apiBase ?? API_BASE;
-    const ac = new AbortController(), t = setTimeout(() => ac.abort(), 30000);
+    const ac = new AbortController(), t = setTimeout(() => ac.abort(), timeout);
     try {
       const init = method === 'GET' ? { signal: ac.signal } : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? null), signal: ac.signal };
       const r = await fetch(base + path, init);
@@ -605,7 +989,7 @@ export default class FireLens extends React.Component {
       watchMarks: p && st.year === CUR_YEAR ? cells.map((c, i) => ({ c, i })).filter(({ c }) => c.lon >= p.lonMin && c.lon <= p.lonMin + p.span && c.lat <= p.latMax && c.lat >= p.latMax - p.latSpan)
         .map(({ c, i }) => ({ n: i + 1, left: ((c.lon - p.lonMin) / p.span * 100) + '%', top: ((p.latMax - c.lat) / p.latSpan * 100) + '%', title: place(c) + ' — ' + (c.baseline_mean < 1 ? 'new fire activity (normally none)' : c.ratio + '× normal'), onClick: zoomTo(c) })) : [],
       plainSummary: this.plainSummary(),
-      cases: CASES.map(c => ({ ...c, onClick: () => { this.setRegion(c.region); this.setState({ year: c.year }); this.go(c.page); } })),
+      cases: CASES.map(c => ({ ...c, onClick: () => { this.setRegion(c.region); this.setState({ year: c.year, ...(c.range ? { rangeFrom: c.range[0], rangeTo: c.range[1] } : {}) }); this.go(c.page); } })),
     };
   }
   plainSummary() {
@@ -634,7 +1018,10 @@ export default class FireLens extends React.Component {
     });
     const maxOf = o => Object.values(o).reduce((m, a) => a.reduce((mm, x) => x != null && x > mm ? x : mm, m), 1);
     const hm = Math.max(maxOf(H), maxOf(M));
-    e.vm = { r, H, M, V, F, P, Q, PV, max: { harmonized: hm, modis: hm, viirs: maxOf(V) } };
+    // Calendar months as the API computes them, so every view of a month shows the same number.
+    let MO = null;
+    if (r.monthly.length && r.monthly[0].complete !== undefined) { MO = {}; r.monthly.forEach(m => { (MO[m.year] = MO[m.year] || [])[m.month - 1] = m; }); }
+    e.vm = { r, H, M, V, F, P, Q, PV, MO, max: { harmonized: hm, modis: hm, viirs: maxOf(V) } };
     return e.vm;
   }
 
@@ -752,33 +1139,47 @@ export default class FireLens extends React.Component {
     if (!vm && this.isSample()) { const rows = this.buildCalSample(); this._ck = key; this._cal = rows; return rows; }
     const R = REG[st.region], monthly = st.calMode === 'monthly', cols = monthly ? 12 : 52, rows = [];
     const src = vm ? (st.source === 'modis' ? vm.M : st.source === 'viirs' ? vm.V : vm.H) : null;
-    const mx = vm ? vm.max[st.source] * (monthly ? 4.3 : 1) : 1;
+    const MO = monthly && vm && vm.MO, key2 = st.source === 'modis' ? 'modis' : st.source === 'viirs' ? 'viirs' : 'harmonized';
+    const mo = (y, c) => (MO && MO[y] && MO[y][c]) || null;
     const label = st.source === 'harmonized' ? 'Harmonized fires (MODIS-eq.)' : st.source === 'modis' ? 'MODIS detections (raw)' : 'VIIRS S-NPP detections (raw)';
     const cell = (y, c) => {
+      if (MO) { const e = mo(y, c); return e ? e[key2] : null; }
       if (!src || !src[y]) return null;
       if (!monthly) return src[y][c];
       let t = 0, any = false; for (let w = 0; w < 52; w++) if (MONTH_OF_WEEK[w] === c && src[y][w] != null) { t += src[y][w]; any = true; }
       return any ? t : null;
     };
-    const frpOf = (y, c) => { const f = vm.F[y]; if (!f) return null; if (!monthly) return f[c]; let t = 0; for (let w = 0; w < 52; w++) if (MONTH_OF_WEEK[w] === c && f[w] != null) t += f[w]; return t; };
-    const pctOf = (y, c) => { const p = vm.P[y]; if (!p) return null; if (!monthly) return p[c]; let t = 0, k = 0; for (let w = 0; w < 52; w++) if (MONTH_OF_WEEK[w] === c && p[w] != null) { t += p[w]; k++; } return k ? t / k : null; };
-    const frpMax = vm ? (monthly ? 4.3 : 1) * Object.values(vm.F).reduce((m, row) => row.reduce((mm, x) => (x != null && x > mm ? x : mm), m), 1) : 1;
-    const colour = (y, c, v) => !vm ? null : st.calMetric === 'frp' ? (frpOf(y, c) == null ? null : ramp(logT(frpOf(y, c), frpMax)))
+    const frpOf = (y, c) => { if (MO) { const e = mo(y, c); return e ? e.frp_mw : null; } const f = vm.F[y]; if (!f) return null; if (!monthly) return f[c]; let t = 0; for (let w = 0; w < 52; w++) if (MONTH_OF_WEEK[w] === c && f[w] != null) t += f[w]; return t; };
+    const pctOf = (y, c) => { if (MO) { const e = mo(y, c); return e ? e.percentile : null; } const p = vm.P[y]; if (!p) return null; if (!monthly) return p[c]; let t = 0, k = 0; for (let w = 0; w < 52; w++) if (MONTH_OF_WEEK[w] === c && p[w] != null) { t += p[w]; k++; } return k ? t / k : null; };
+    const span = vm ? this.calRange() : { lo: 0, hi: 1 }, L0 = Math.log1p(span.lo), L1 = Math.log1p(Math.max(span.hi, span.lo + 1));
+    const tOf = v => (Math.log1p(Math.max(v, span.lo)) - L0) / (L1 - L0);
+    const colour = (y, c, v) => !vm ? null : st.calMetric === 'frp' ? (frpOf(y, c) == null ? null : ramp(tOf(frpOf(y, c))))
       : st.calMetric === 'anomaly' ? (pctOf(y, c) == null ? null : diverge(pctOf(y, c)))
-      : (v == null ? null : ramp(logT(v, mx)));
+      : (v == null ? null : ramp(tOf(v)));
+    // Monthly cells carry the number itself, so the calendar reads without hovering (and on touch screens).
+    const compact = compactN;
+    const numOf = (y, c, v) => {
+      if (!monthly || !vm) return '';
+      if (st.calMetric === 'frp') { const f = frpOf(y, c); return f == null ? '' : fmtMW(f).replace(/\.\d+/, '').replace(' ', ''); }
+      if (st.calMetric === 'anomaly') { const p = pctOf(y, c); return p == null ? '' : String(Math.round(p)); }
+      return v == null ? '' : compact(v);
+    };
     for (let y = CUR_YEAR; y >= 2000; y--) {
       const cells = [];
+      let total = 0, full = true;
       for (let c = 0; c < cols; c++) {
-        const v = cell(y, c);
-        const onEnter = e => {
+        const v = cell(y, c), e = mo(y, c);
+        if (monthly) { if (v != null) total += v; if (!e || e.complete === false) full = false; }
+        const onEnter = ev => {
           if (v == null) { this.setState({ tip: null }); return; }
-          const p = monthly ? null : vm.P[y] && vm.P[y][c];
-          this.setState({ tip: { x: e.clientX, y: e.clientY, title: (monthly ? MON[c] : 'Week ' + (c + 1) + ' (' + wkDate(y, c + 1) + ')') + ' · ' + y, label, fires: fmt(v), frp: fmtMW(frpOf(y, c)), pct: p == null ? '—' : ord(p), cover: R.cover || 'Mixed', src: (st.source === 'harmonized' ? (y >= 2012 ? 'VIIRS S-NPP → MODIS-eq.' : 'MODIS Terra/Aqua') : st.source === 'modis' ? 'MODIS C6.1' : 'VIIRS S-NPP 375 m') + (monthly ? '' : QNOTE[vm.Q[y] && vm.Q[y][c]] || '') + (!monthly && vm.PV[y] && vm.PV[y][c] ? ' · provisional (NRT)' : '') } });
+          const p = monthly ? pctOf(y, c) : vm.P[y] && vm.P[y][c];
+          const extra = e ? (e.complete ? (e.median != null ? 'Median ' + MON[c] + ': ' + fmt(e.median) + (e.x_median != null ? ' (' + e.x_median.toFixed(1) + '× median)' : '') : '') : 'Month in progress') : '';
+          this.setState({ tip: { x: ev.clientX, y: ev.clientY, title: (monthly ? MON[c] : 'Week ' + (c + 1) + ' (' + wkDate(y, c + 1) + ')') + ' · ' + y, label, fires: fmt(v), frp: fmtMW(frpOf(y, c)), pct: p == null ? '—' : ord(p), cover: R.cover || 'Mixed', extra, src: (st.source === 'harmonized' ? (y >= 2012 ? 'VIIRS S-NPP → MODIS-eq.' : 'MODIS Terra/Aqua') : st.source === 'modis' ? 'MODIS C6.1' : 'VIIRS S-NPP 375 m') + (monthly ? '' : QNOTE[vm.Q[y] && vm.Q[y][c]] || '') + (!monthly && vm.PV[y] && vm.PV[y][c] ? ' · provisional (NRT)' : '') } });
         };
-        const bg = colour(y, c, v);
-        cells.push({ bg: bg == null ? 'rgba(255,255,255,.03)' : bg, onEnter, onClick: () => this.setState({ year: y }) });
+        const bg = colour(y, c, v), txt = numOf(y, c, v);
+        cells.push({ bg: bg == null ? 'rgba(255,255,255,.03)' : bg, txt: txt && e && e.complete === false ? txt + '*' : txt, fg: inkOn(bg), onEnter, onClick: ev => { onEnter(ev); this.setState({ year: y }); } });
       }
-      rows.push({ full: String(y), label: y % 2 === 0 ? String(y) : '', labelColor: y === st.year ? '#ffb27a' : '#7f8ea8', outline: y === st.year ? '1px solid rgba(255,178,122,.55)' : 'none', cells });
+      rows.push({ full: String(y), label: y % 2 === 0 ? String(y) : '', labelColor: y === st.year ? '#ffb27a' : '#7f8ea8', outline: y === st.year ? '1px solid rgba(255,178,122,.55)' : 'none', cells, total: monthly && vm && st.calMetric === 'count' && total ? compact(total) + (full ? '' : '*') : '' });
     }
     this._ck = key; this._cal = rows; return rows;
   }
@@ -858,7 +1259,7 @@ export default class FireLens extends React.Component {
   }
   reportVals() {
     const st = this.state, vm = this.vm(st.region), e = this.store[st.region] || {};
-    const out = { reportDate: new Date().toISOString().slice(0, 10), reportTiles: [], reportCal: [], reportPeak: '—', reportOutlook: 'No outlook available for this area.', reportCorrob: 'No live detections loaded for this area.' };
+    const out = { reportDate: new Date().toISOString().slice(0, 10), reportTiles: [], reportCal: [], reportPeak: '—', reportMonths: '', reportOutlook: 'No outlook available for this area.', reportCorrob: 'No live detections loaded for this area.' };
     if (e.corrob) {
       const c = e.corrob, t = c.CONFIRMED + c.LIKELY + c.POSSIBLE;
       out.reportCorrob = t ? fmt(t) + ' detections (' + (st.days === 1 ? 'last 24 h' : 'last ' + st.days + ' days') + '): ' + fmt(c.CONFIRMED) + ' confirmed by two or more satellites, ' + fmt(c.LIKELY) + ' likely, ' + fmt(c.POSSIBLE) + ' possible.' : 'No active fires detected in the live window.';
@@ -874,6 +1275,11 @@ export default class FireLens extends React.Component {
       { k: 'OUTLOOK', v: o.available ? o.risk_level : '—', d: o.available ? 'next ' + o.weeks.length + ' weeks' : '', color: o.available ? { HIGH: '#d9342b', ELEVATED: '#d9822b', NORMAL: '#1f9d55' }[o.risk_level] : undefined },
       { k: 'ALERTS ' + r.current_year, v: String(r.anomalies.filter(a => a.year === r.current_year).length), d: 'onset, surge, suppression' },
     ];
+    const mv = this.monthVals();
+    if (mv.has) {
+      [mv.cur, mv.last, mv.ytd].filter(Boolean).forEach(t => out.reportTiles.push({ k: t.k.toUpperCase(), v: t.v, d: t.d, color: t.color === '#fff' ? undefined : t.color }));
+      out.reportMonths = mv.busiest + ' Most burning years: ' + r.month_stats.top_years.map(yy => yy.year + ' (' + fmt(yy.total) + ')').join(', ') + '. Most burning months: ' + r.month_stats.top_months.slice(0, 3).map(m => MON[m.month - 1] + ' ' + m.year).join(', ') + '.';
+    }
     const mx = vm.max.harmonized;
     for (let y = r.current_year; y >= 2000; y--) out.reportCal.push({ label: y % 2 === 0 ? String(y) : '', cells: Array.from({ length: 52 }, (_, w) => { const v = vm.H[y] && vm.H[y][w]; return { bg: v == null ? '#e9edf3' : ramp(logT(v, mx)) }; }) });
     out.reportPeak = 'week ' + b.peak_week + ' (' + s.peak_month + '), season onset median week ' + (b.onset_median_week || '—');
@@ -921,7 +1327,7 @@ export default class FireLens extends React.Component {
   }
   pageVals() {
     const st = this.state, R = REG[st.region], pg = st.page, vm = this.vm(st.region);
-    const NAV = [['home', 'Home'], ['harmonize', 'Harmonize'], ['calendar', 'Fire Calendar'], ['anomalies', 'Anomalies'], ['data', 'Data'], ['cases', 'Case Studies']];
+    const NAV = [['home', 'Home'], ['harmonize', 'Harmonize'], ['calendar', 'Fire Calendar'], ['range', 'Date Range'], ['anomalies', 'Anomalies'], ['data', 'Data'], ['cases', 'Case Studies']];
     const goExplore = id => { this.setState({ page: 'home', tip: null }); setTimeout(() => { const el = document.getElementById(id); if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 80, behavior: 'smooth' }); }, 60); };
     const e = this.store[st.region] || {};
     const status = !(this.props.useLiveApi ?? true) ? 'off' : e.report ? 'live' : e.noArchive ? 'noarchive' : e.reportErr || this.offline ? 'offline' : 'loading';
@@ -930,7 +1336,7 @@ export default class FireLens extends React.Component {
     const fa = a => { const [color, tint] = SEV[a.severity] || SEV.INFO; const r = a.historical_mean ? a.current_value / a.historical_mean : 0; return { sev: a.severity, color, tint, title: TYPE[a.alert_type] || a.alert_type, desc: a.description, when: 'Week ' + a.week + ' · ' + a.year, date: 'around ' + wkDate(a.year, a.week), cur: fmt(a.current_value), mean: fmt(a.historical_mean), curW: (a.current_value / top * 100) + '%', meanW: (a.historical_mean / top * 100) + '%', pctl: ord(a.percentile), vs: r ? (r >= 1 ? '+' : '') + Math.round((r - 1) * 100) + '% vs mean' : '' }; };
     const list = anoms.filter(a => st.sev === 'All' || a.severity === st.sev).map(fa);
     const cnt = s => anoms.filter(a => s === 'All' || a.severity === s).length;
-    const titles = { harmonize: ['Harmonize', 'MODIS (1 km) and VIIRS (375 m) on one scale — calibrated on the years both sensors flew, so 2000–2026 compare directly.'], calendar: ['Burning activity calendar', 'Week-by-week harmonized hotspots for every year. Find the critical periods and how the season is shifting.'], anomalies: ['Anomalies & early warning', 'Weeks where burning departs from the 2003–2025 baseline, and an analog-year outlook for the weeks ahead.'], data: ['Data & export', 'Download what you see and check the source fields behind it.'], report: ['Area report', 'One page for responders and land managers — print it or save it as PDF.'], cases: ['Case studies', 'Known fire events that stand out in the harmonized 26-year record — found in the data, not told to it. Open one to see it on the calendar.'] };
+    const titles = { harmonize: ['Harmonize', 'MODIS (1 km) and VIIRS (375 m) on one scale — calibrated on the years both sensors flew, so 2000–2026 compare directly.'], calendar: ['Burning activity calendar', 'Harmonized hotspots for every month or week since 2000. See which periods burn most, which years stand out and how the season is shifting.'], anomalies: ['Anomalies & early warning', 'Weeks where burning departs from the 2003–2025 baseline, and an analog-year outlook for the weeks ahead.'], data: ['Data & export', 'Download what you see and check the source fields behind it.'], range: ['Date range', 'Any area, any dates: harmonized totals, the same dates in every year since 2000, every hotspot detected — and all of it to download.'], report: ['Area report', 'One page for responders and land managers — print it or save it as PDF.'], cases: ['Case studies', 'Known fire events that stand out in the harmonized 26-year record — found in the data, not told to it. Open one to see it on the calendar.'] };
     const cal = vm && vm.r.calibration, mt = cal && cal.model && cal.model.test;
     const maxRatio = cal ? Math.max(1, ...cal.yearly.map(y => y.ratio || 0)) : 1, maxA = cal ? Math.max(1, ...cal.alpha_by_month.map(a => a || 0)) : 1;
     const o = vm && vm.r.outlook, oOK = !!(o && o.available);
@@ -950,7 +1356,7 @@ export default class FireLens extends React.Component {
       menuOpen: st.menuOpen ? '1' : '0', menuGlyph: st.menuOpen ? '✕' : '☰', toggleMenu: () => this.setState(s => ({ menuOpen: !s.menuOpen })),
       goHome: () => this.go('home'), goHarm: () => this.go('harmonize'), goCalendar: () => this.go('calendar'), goAnom: () => this.go('anomalies'), goExplore: () => { this.setState({ menuOpen: false }); goExplore('explore'); }, nearMe: () => this.nearMe(),
       headerSearch: this.headerSearch, kbdHint: typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? '⌘K' : 'Ctrl K',
-      homeDisplay: pg === 'home' ? 'block' : 'none', isDetail: pg !== 'home', isHarm: pg === 'harmonize', isCal: pg === 'calendar', isAnom: pg === 'anomalies', isData: pg === 'data', isReport: pg === 'report', isCases: pg === 'cases',
+      homeDisplay: pg === 'home' ? 'block' : 'none', isDetail: pg !== 'home', isHarm: pg === 'harmonize', isCal: pg === 'calendar', isAnom: pg === 'anomalies', isData: pg === 'data', isReport: pg === 'report', isCases: pg === 'cases', isRange: pg === 'range', goRange: () => this.go('range'),
       goReport: () => this.go('report'), goCases: () => this.go('cases'), printNow: () => window.print(),
       ...this.liveChecks(), ...this.reportVals(), ...this.interactVals(),
       pageTitle: (titles[pg] || ['', ''])[0], pageSub: (titles[pg] || ['', ''])[1],
@@ -996,11 +1402,14 @@ export default class FireLens extends React.Component {
           vm.r.calendar.forEach(y => y.weeks.forEach(w => { if (w.status === 'NO_DATA') return; t += [y.year, w.week, new Date(Date.UTC(y.year, 0, 1 + (w.week - 1) * 7)).toISOString().slice(0, 10), w.modis_raw, y.year >= 2012 ? w.viirs_raw : '', w.harmonized_count, w.total_frp, w.percentile, w.status].join(',') + '\n'; }));
           this.download('firelens-calendar-' + tag + '.csv', t, 'text/csv'); return;
         }
-        let t = 'year,week,sample_fires\n'; for (let y = 2000; y <= 2026; y++) for (let w = 0; w < 52; w++) t += y + ',' + (w + 1) + ',' + (this.cv(R, y, w) * R.wk).toFixed(1) + '\n'; this.download('firelens-calendar-SAMPLE-' + tag + '.csv', t, 'text/csv');
+        this.setState({ dlMsg: 'Real data for ' + st.region + ' has not loaded yet — nothing to download.' });
       },
-      dlAnom: () => this.download('firelens-anomalies-' + tag + '.json', JSON.stringify(anoms, null, 2), 'application/json'),
-      dlHarm: () => this.download('firelens-harmonize-' + tag + '.json', JSON.stringify(H.raw, null, 2), 'application/json'),
-      dlReport: () => vm && this.download('firelens-report-' + tag + '.json', JSON.stringify(vm.r, null, 1), 'application/json'),
+      dlMonth: () => (vm ? this.download('firelens-months-' + tag + '.csv', this.monthCsv(), 'text/csv') : this.setState({ dlMsg: 'Real data for ' + st.region + ' has not loaded yet — nothing to download.' })),
+      dlCalPng: () => this.figureDownload('calendar', 'png'), dlCalSvg: () => this.figureDownload('calendar', 'svg'), dlTrendPng: () => this.figureDownload('trend', 'png'),
+      dlMsg: st.dlMsg,
+      dlAnom: () => (this.isSample() ? this.setState({ dlMsg: 'Real data has not loaded — nothing to download.' }) : this.download('firelens-anomalies-' + tag + '.json', JSON.stringify(anoms, null, 2), 'application/json')),
+      dlHarm: () => (H.raw.sample ? this.setState({ dlMsg: 'Real data has not loaded — nothing to download.' }) : this.download('firelens-harmonize-' + tag + '.json', JSON.stringify(H.raw, null, 2), 'application/json')),
+      dlReport: () => (vm ? this.download('firelens-report-' + tag + '.json', JSON.stringify(vm.r, null, 1), 'application/json') : this.setState({ dlMsg: 'Real data for ' + st.region + ' has not loaded yet — nothing to download.' })),
     };
   }
 
@@ -1040,8 +1449,13 @@ export default class FireLens extends React.Component {
       calRows: this.buildCal(), calCols: st.calMode === 'monthly' ? 12 : 52, calUnit: st.calMode === 'monthly' ? 'month' : 'week', calMode: st.calMode,
       onModeSelect: ev => this.setState({ calMode: ev.target.value }),
       calMetric: st.calMetric, onMetricSelect: ev => this.setState({ calMetric: ev.target.value }),
-      calLegend: st.calMetric === 'anomaly' ? 'linear-gradient(90deg,#3b8cff,#2c3448,#ff4a2a)' : 'linear-gradient(90deg,#121a3d,#1f2b6b,#5a2a7a,#b0283f,#e5402a,#ff7a1a,#ffd04a)',
+      calLegend: st.calMetric === 'anomaly' ? 'linear-gradient(90deg,#3b8cff,#2c3448,#ff4a2a)' : cssGradient(STOPS), calLegendCount: cssGradient(STOPS),
       calLo: st.calMetric === 'anomaly' ? 'Quieter than normal' : 'Low', calHi: st.calMetric === 'anomaly' ? 'More fire than normal' : 'High',
+      calTicks: this.calScale().ticks,
+      calHasTotal: st.calMode === 'monthly' && st.calMetric === 'count' && !!this.vm(st.region),
+      calMedianRow: (() => { const vmm = this.vm(st.region), m = vmm && vmm.r.month_stats; return st.calMode === 'monthly' && st.calMetric === 'count' && st.source === 'harmonized' && m ? m.climatology.map(c => compactN(c.median || 0)) : null; })(),
+      palette: st.palette, onPalette: ev => this.setPalette(ev.target.value), paletteOpts: Object.entries(PALETTES).map(([k, p]) => ({ k, label: p.label })),
+      rg: st.page === 'range' ? this.rangeVals() : null, ms: this.monthVals(), co: this.coordVals(), sampleBanner: this.isSample() && !!(this.props.useLiveApi ?? true),
       calMetricNote: { count: 'Harmonized fire detections per ' + (st.calMode === 'monthly' ? 'month' : 'week') + ' (log colour scale)', frp: 'Fire radiative power — how much energy the fires release (harmonized, log scale)', anomaly: 'How unusual each ' + (st.calMode === 'monthly' ? 'month' : 'week') + ' was: percentile of the 2-week value vs the same weeks of 2003–2025' }[st.calMetric],
       clearTip: () => this.setState({ tip: null }),
       tipShow: !!tip, tip: tip || {}, tipLeft: tip ? (tip.x > window.innerWidth - 250 ? tip.x - 236 : tip.x + 16) + 'px' : '0px', tipTop: tip ? (tip.y > window.innerHeight - 190 ? tip.y - 180 : tip.y + 16) + 'px' : '0px',
@@ -1101,6 +1515,7 @@ export default class FireLens extends React.Component {
           </div>
         </div>
       </header>
+      <SampleBanner show={v.sampleBanner} />
 
       <div style={{ display: v.homeDisplay }}>
       <main id="top" data-m="pad" style={{ maxWidth: "1480px", margin: "0 auto", padding: "28px 28px 0" }}>
@@ -1117,6 +1532,7 @@ export default class FireLens extends React.Component {
               <button onClick={v.heroSearch} style={{ width: "42px", height: "42px", border: "0", borderRadius: "10px", background: "linear-gradient(135deg,#ff5a1a,#ff8a1f)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "20px", fontWeight: "700", cursor: "pointer" }}>→</button>
             </div>
             {v.hasSearchMsg && <><div style={{ marginTop: "-12px", fontSize: "13px", color: v.searchMsgColor }}>{v.searchMsg}</div></>}
+            <div style={{ marginTop: "-8px" }}><CoordForm co={v.co} /></div>
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontSize: "14px", fontWeight: "600", color: "#c8d3e8" }}>Quick regions</span>{v.notGlobal && <><button onClick={v.resetGlobal} style={{ background: "none", border: "0", padding: "0", color: "#ff9a5a", font: "600 12px Manrope", cursor: "pointer" }}>← Back to global</button></>}</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
@@ -1274,6 +1690,7 @@ export default class FireLens extends React.Component {
                   </select>
                 </div>
               </div>
+              <div data-m="widewrap"><div data-m={v.calCols === 12 ? "wide" : undefined} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "40px repeat(12,minmax(0,1fr))", fontSize: "11px", color: "#9fb0cc" }}>
               <div title={v.critText} style={{ display: v.hasCrit ? "flex" : "none", alignItems: "center", marginBottom: "3px" }}><span style={{ width: "40px", flex: "none", fontSize: "9px", color: "#ffb27a", fontWeight: "700" }}>CRIT.</span><div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(52,minmax(0,1fr))", gap: "2px" }}>{v.critBand.map((c, i9) => <span key={i9} style={{ height: "5px", borderRadius: "1px", background: c }}></span>)}</div></div>
                 <span></span><span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span>
@@ -1284,17 +1701,19 @@ export default class FireLens extends React.Component {
                     <span style={{ width: "40px", flex: "none", fontSize: "10px", color: r.labelColor, fontFamily: "'Space Grotesk'" }}>{r.label}</span>
                     <div style={{ flex: "1", display: "grid", gridTemplateColumns: `repeat(${v.calCols},minmax(0,1fr))`, gap: "2px" }}>
                       {r.cells.map((c, i1) => <React.Fragment key={i1}>
-                        <div onMouseEnter={c.onEnter} onClick={c.onClick} style={{ cursor: "pointer", height: "10px", borderRadius: "1.5px", background: c.bg }}></div>
+                        <div onMouseEnter={c.onEnter} onClick={c.onClick} style={{ cursor: "pointer", height: v.calCols === 12 ? "15px" : "10px", borderRadius: "1.5px", background: c.bg, color: c.fg, font: "600 9px Manrope", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>{c.txt}</div>
                       </React.Fragment>)}
                     </div>
                   </div>
                 </React.Fragment>)}
               </div>
+              </div></div>
+              {v.calCols === 12 && <div className="fl-phone" style={{ fontSize: "12px", color: "#9fb0cc" }}>Swipe sideways to see every month →</div>}
               <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "12px", color: "#9fb0cc", marginTop: "4px", flexWrap: "wrap" }}>
                 <span>Low</span>
-                <div style={{ flex: "1", minWidth: "120px", maxWidth: "320px", height: "6px", borderRadius: "3px", background: "linear-gradient(90deg,#121a3d,#1f2b6b,#5a2a7a,#b0283f,#e5402a,#ff7a1a,#ffd04a)" }}></div>
+                <div style={{ flex: "1", minWidth: "120px", maxWidth: "320px", height: "6px", borderRadius: "3px", background: v.calLegendCount }}></div>
                 <span>High</span>
-                <span style={{ marginLeft: "auto" }}>Log colour scale · empty = no sensor data · hover for gap-filled / provisional weeks</span>
+                <span style={{ marginLeft: "auto" }}>Log colour scale · empty = no sensor data · * = incomplete · hover or tap a cell for details</span>
               </div>
             </div>
 
@@ -1539,23 +1958,36 @@ export default class FireLens extends React.Component {
               <select value={v.calMetric} onChange={v.onMetricSelect} style={{ height: "32px", padding: "0 10px", borderRadius: "8px", background: "rgba(255,255,255,.04)", border: "1px solid rgba(130,160,210,.2)", color: "#e8eefb", font: "600 13px Manrope" }}><option value="count">Fire count</option><option value="frp">Fire intensity (FRP)</option><option value="anomaly">Anomaly vs 2003–2025</option></select>
               <span style={{ fontSize: "12px", color: "#9fb0cc", fontWeight: "700", marginLeft: "8px" }}>RESOLUTION</span>
               <select value={v.calMode} onChange={v.onModeSelect} style={{ height: "32px", padding: "0 10px", borderRadius: "8px", background: "rgba(255,255,255,.04)", border: "1px solid rgba(130,160,210,.2)", color: "#e8eefb", font: "600 13px Manrope" }}><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+              <span style={{ fontSize: "12px", color: "#9fb0cc", fontWeight: "700", marginLeft: "8px" }}>COLOURS</span>
+              <select value={v.palette} onChange={v.onPalette} aria-label="Colour ramp" style={{ height: "32px", padding: "0 10px", borderRadius: "8px", background: "rgba(255,255,255,.04)", border: "1px solid rgba(130,160,210,.2)", color: "#e8eefb", font: "600 13px Manrope" }}>{v.paletteOpts.map(o => <option key={o.k} value={o.k}>{o.label}</option>)}</select>
               <span style={{ marginLeft: "auto", fontSize: "12px", color: "#9fb0cc" }}>Weekly is the finest reliable step — shorter bins are biased by satellite orbits (MODIS user guide)</span>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "flex-start" }}>
               <div className="glass" onMouseLeave={v.clearTip} style={{ flex: "2 1 600px", minWidth: "0", padding: "20px", display: "flex", flexDirection: "column", gap: "3px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "44px repeat(12,minmax(0,1fr))", fontSize: "11px", color: "#9fb0cc", marginBottom: "6px" }}><span></span><span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span></div>
-                <div title={v.critText} style={{ display: v.hasCrit ? "flex" : "none", alignItems: "center", marginBottom: "3px" }}><span style={{ width: "44px", flex: "none", fontSize: "9px", color: "#ffb27a", fontWeight: "700" }}>CRIT.</span><div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(52,minmax(0,1fr))", gap: "2px" }}>{v.critBand.map((c, i9) => <span key={i9} style={{ height: "5px", borderRadius: "1px", background: c }}></span>)}</div></div>
+                <div data-m="widewrap"><div data-m={v.calCols === 12 ? "wide" : undefined} style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: v.calCols === 12 && v.calHasTotal ? "44px repeat(12,minmax(0,1fr)) 46px" : "44px repeat(12,minmax(0,1fr))", fontSize: "11px", color: "#9fb0cc", marginBottom: "6px" }}><span></span><span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span>{v.calCols === 12 && v.calHasTotal && <span style={{ textAlign: "right" }}>Year</span>}</div>
+                <div title={v.critText} style={{ display: v.hasCrit && v.calCols !== 12 ? "flex" : "none", alignItems: "center", marginBottom: "3px" }}><span style={{ width: "44px", flex: "none", fontSize: "9px", color: "#ffb27a", fontWeight: "700" }}>CRIT.</span><div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(52,minmax(0,1fr))", gap: "2px" }}>{v.critBand.map((c, i9) => <span key={i9} style={{ height: "5px", borderRadius: "1px", background: c }}></span>)}</div></div>
+                {v.calMedianRow && <div style={{ display: "flex", alignItems: "center", marginBottom: "4px" }}><span style={{ width: "44px", flex: "none", fontSize: "10px", color: "#ffb27a", fontWeight: "700" }}>Median</span><div style={{ flex: "1", display: "grid", gridTemplateColumns: "repeat(12,minmax(0,1fr))", gap: "2px" }}>{v.calMedianRow.map((t, i9) => <div key={i9} style={{ height: "22px", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "2px", border: "1px solid rgba(255,178,122,.35)", font: "700 10px Manrope", color: "#ffd2b5" }}>{t}</div>)}</div>{v.calHasTotal && <span style={{ width: "46px", flex: "none" }}></span>}</div>}
                 {v.calRowsBig.map((r, i2) => <React.Fragment key={i2}>
                   <div style={{ display: "flex", alignItems: "center", outline: r.outline, outlineOffset: "1px", borderRadius: "2px" }}>
                     <span style={{ width: "44px", flex: "none", fontSize: "11px", color: r.labelColor, fontFamily: "'Space Grotesk'" }}>{r.full}</span>
                     <div style={{ flex: "1", display: "grid", gridTemplateColumns: `repeat(${v.calCols},minmax(0,1fr))`, gap: "2px" }}>
-                      {r.cells.map((c, i3) => <React.Fragment key={i3}><div onMouseEnter={c.onEnter} onClick={c.onClick} style={{ cursor: "pointer", height: "15px", borderRadius: "2px", background: c.bg }}></div></React.Fragment>)}
+                      {r.cells.map((c, i3) => <React.Fragment key={i3}><div onMouseEnter={c.onEnter} onClick={c.onClick} style={{ cursor: "pointer", height: v.calCols === 12 ? "22px" : "15px", borderRadius: "2px", background: c.bg, color: c.fg, font: "600 10px Manrope", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>{c.txt}</div></React.Fragment>)}
                     </div>
+                    {v.calCols === 12 && v.calHasTotal && <span style={{ width: "46px", flex: "none", textAlign: "right", font: "700 10px Manrope", color: "#e8eefb" }}>{r.total}</span>}
                   </div>
                 </React.Fragment>)}
-                <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "12px", color: "#9fb0cc", marginTop: "12px", flexWrap: "wrap" }}><span>{v.calLo}</span><div style={{ flex: "1", minWidth: "120px", maxWidth: "320px", height: "6px", borderRadius: "3px", background: v.calLegend }}></div><span>{v.calHi}</span><span style={{ marginLeft: "auto" }}>{v.calMetricNote}</span></div>
+                </div></div>
+                {v.calCols === 12 && <div className="fl-phone" style={{ fontSize: "12px", color: "#9fb0cc", marginTop: "6px" }}>Swipe sideways to see every month →</div>}
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", fontSize: "12px", color: "#9fb0cc", marginTop: "12px", flexWrap: "wrap" }}><span>{v.calLo}</span><div style={{ flex: "1", minWidth: "160px", maxWidth: "340px" }}><div style={{ height: "8px", borderRadius: "3px", background: v.calLegend }}></div>{v.calTicks.length > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#9fb0cc", marginTop: "3px" }}>{v.calTicks.map((t, i9) => <span key={i9}>{t}</span>)}</div>}</div><span>{v.calHi}</span><span style={{ marginLeft: "auto" }}>{v.calMetricNote}</span></div>
+                <div data-noprint style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px", alignItems: "center" }}>
+                  <span style={{ fontSize: "12px", color: "#9fb0cc", fontWeight: "700" }}>DOWNLOAD THIS CALENDAR</span>
+                  {[["PNG", v.dlCalPng], ["SVG", v.dlCalSvg], ["CSV", v.dlCal], ["Months · CSV", v.dlMonth]].map(([l, fn], i9) => <button key={i9} onClick={fn} style={{ height: "30px", padding: "0 12px", borderRadius: "8px", background: "rgba(61,220,132,.08)", border: "1px solid rgba(61,220,132,.4)", color: "#bff5d6", font: "700 12px Manrope", cursor: "pointer" }}>{l}</button>)}
+                  {v.dlMsg && <span style={{ fontSize: "12px", color: "#ffa53a" }}>{v.dlMsg}</span>}
+                </div>
               </div>
               <div style={{ flex: "1 1 min(320px,100%)", minWidth: "0", display: "flex", flexDirection: "column", gap: "16px" }}>
+                <MonthStatsCard ms={v.ms} />
                 <div className="glass" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "12px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontFamily: "'Space Grotesk'", fontSize: "17px", fontWeight: "600" }}>{v.year} season</span><div style={{ display: "flex", gap: "4px" }}><button onClick={v.prevYear} style={{ width: "30px", height: "30px", borderRadius: "8px", border: "1px solid rgba(130,160,210,.22)", background: "rgba(255,255,255,.04)", color: "#fff", cursor: "pointer" }}>‹</button><button onClick={v.nextYear} style={{ width: "30px", height: "30px", borderRadius: "8px", border: "1px solid rgba(130,160,210,.22)", background: "rgba(255,255,255,.04)", color: "#fff", cursor: "pointer" }}>›</button></div></div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: "10px" }}>
@@ -1579,6 +2011,8 @@ export default class FireLens extends React.Component {
             </div>
           </div>
         </>}
+
+        {v.isRange && v.rg && <RangePage rg={v.rg} />}
 
         {v.isAnom && <>
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -1639,7 +2073,9 @@ export default class FireLens extends React.Component {
               <button onClick={v.dlAnom} style={{ textAlign: "left", padding: "18px", borderRadius: "16px", background: "rgba(61,220,132,.06)", border: "1px solid rgba(61,220,132,.35)", color: "#e8eefb", cursor: "pointer", fontFamily: "Manrope" }}><div style={{ fontFamily: "'Space Grotesk'", fontSize: "17px", fontWeight: "700" }}>Anomaly alerts · JSON</div><div style={{ fontSize: "12px", color: "#9fb0cc", marginTop: "4px" }}>Same schema as /calendar/anomalies</div></button>
               <button onClick={v.dlHarm} style={{ textAlign: "left", padding: "18px", borderRadius: "16px", background: "rgba(61,220,132,.06)", border: "1px solid rgba(61,220,132,.35)", color: "#e8eefb", cursor: "pointer", fontFamily: "Manrope" }}><div style={{ fontFamily: "'Space Grotesk'", fontSize: "17px", fontWeight: "700" }}>Harmonization result · JSON</div><div style={{ fontSize: "12px", color: "#9fb0cc", marginTop: "4px" }}>Same schema as /harmonize/calculate</div></button>
               <button onClick={v.dlReport} style={{ textAlign: "left", padding: "18px", borderRadius: "16px", background: "rgba(61,220,132,.06)", border: "1px solid rgba(61,220,132,.35)", color: "#e8eefb", cursor: "pointer", fontFamily: "Manrope" }}><div style={{ fontFamily: "'Space Grotesk'", fontSize: "17px", fontWeight: "700" }}>Full AOI report · JSON</div><div style={{ fontSize: "12px", color: "#9fb0cc", marginTop: "4px" }}>Calendar, baseline, anomalies, outlook, calibration</div></button>
+              {[["Hotspots for any dates · CSV →", "Every detection in a date range — pick dates on the Date range page", v.goRange, true], ["Month statistics · CSV", "Every month since 2000 with its 2003–2025 median", v.dlMonth], ["Burning calendar · PNG", "The heatmap as an image, with legend and source", v.dlCalPng], ["Burning calendar · SVG", "Vector version for reports and posters", v.dlCalSvg], ["Fire trend chart · PNG", "Monthly harmonized vs raw MODIS and VIIRS", v.dlTrendPng]].map(([t, d, fn, hot], i9) => <button key={i9} onClick={fn} style={{ textAlign: "left", padding: "18px", borderRadius: "16px", background: hot ? "rgba(255,106,26,.08)" : "rgba(61,220,132,.06)", border: "1px solid " + (hot ? "rgba(255,106,26,.5)" : "rgba(61,220,132,.35)"), color: "#e8eefb", cursor: "pointer", fontFamily: "Manrope" }}><div style={{ fontFamily: "'Space Grotesk'", fontSize: "17px", fontWeight: "700" }}>{t}</div><div style={{ fontSize: "12px", color: "#9fb0cc", marginTop: "4px" }}>{d}</div></button>)}
             </div>
+            {v.dlMsg && <div role="status" style={{ fontSize: "13px", color: "#ffa53a" }}>{v.dlMsg}</div>}
             <div className="glass" data-m="widewrap" style={{ padding: "20px" }}>
               <div style={{ fontFamily: "'Space Grotesk'", fontSize: "17px", fontWeight: "600", marginBottom: "10px" }}>NASA FIRMS fields</div>
               <div data-m="wide" style={{ display: "grid", gridTemplateColumns: "200px 140px minmax(0,1fr)", gap: "12px", padding: "10px 0", fontSize: "12px", color: "#9fb0cc", borderBottom: "1px solid rgba(130,160,210,.12)" }}><span>Field</span><span>Sensor</span><span>Meaning</span></div>
@@ -1680,6 +2116,7 @@ export default class FireLens extends React.Component {
               <div style={{ display: "grid", gridTemplateColumns: "40px repeat(12,minmax(0,1fr))", fontSize: "10px", color: "#5b6477" }}><span></span>{["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map(m => <span key={m}>{m}</span>)}</div>
               {v.reportCal.map((r, i2) => <div key={i2} style={{ display: "flex", alignItems: "center" }}><span style={{ width: "40px", flex: "none", fontSize: "9px", color: "#5b6477" }}>{r.label}</span><div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(52,minmax(0,1fr))", gap: "1px" }}>{r.cells.map((c, i3) => <span key={i3} style={{ height: "7px", background: c.bg, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}></span>)}</div></div>)}
               <div style={{ fontSize: "11px", color: "#5b6477", marginTop: "4px" }}>Low → high (log scale). Grey = no sensor data. Baseline peak: {v.reportPeak}.</div>
+              {v.reportMonths && <div style={{ fontSize: "12px", color: "#141a26", marginTop: "6px" }}>{v.reportMonths}</div>}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: "18px" }}>
               <div>
@@ -1717,6 +2154,7 @@ export default class FireLens extends React.Component {
           <div>{v.tip.label}: <b style={{ color: "#fff" }}>{v.tip.fires}</b></div>
           <div>FRP: <b style={{ color: "#fff" }}>{v.tip.frp}</b></div>
           <div>Percentile: <b style={{ color: "#ff8a4a" }}>{v.tip.pct}</b></div>
+          {v.tip.extra && <div>{v.tip.extra}</div>}
           <div>Land cover: {v.tip.cover}</div>
           <div>Sources: {v.tip.src}</div>
         </div>

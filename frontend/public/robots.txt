@@ -1,0 +1,4 @@
+# FireLens is kept out of search results with noindex (page tag and X-Robots-Tag header).
+# Crawling stays allowed so search engines can see that noindex and drop the site.
+User-agent: *
+Allow: /

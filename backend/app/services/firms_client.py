@@ -1,3 +1,4 @@
+import datetime as dt
 import logging
 import urllib.request
 import asyncio
@@ -21,14 +22,27 @@ class FIRMSClient:
         self.api_key = api_key or settings.FIRMS_API_KEY
         self.base_url = settings.FIRMS_BASE_URL.rstrip('/')
 
-    def _build_url(self, source_code: str, bbox: BoundingBox, day_range: int = 1) -> str:
+    MAX_SPAN = 5  # the FIRMS area API serves at most 5 days per request
+
+    def _build_url(self, source_code: str, bbox: BoundingBox, day_range: int = 1, date: Optional[dt.date] = None) -> str:
         coords = f"{bbox.west:.4f},{bbox.south:.4f},{bbox.east:.4f},{bbox.north:.4f}"
-        return f"{self.base_url}/{self.api_key}/{source_code}/{coords}/{day_range}"
+        return f"{self.base_url}/{self.api_key}/{source_code}/{coords}/{day_range}" + (f"/{date.isoformat()}" if date else "")
 
     def _fetch_source_sync(self, source_code: str, bbox: BoundingBox, day_range: int = 1) -> List[Dict[str, Any]]:
-        url = self._build_url(source_code, bbox, day_range)
-        logger.info(f"FIRMS: querying {source_code} for bbox [{bbox.west}, {bbox.south}, {bbox.east}, {bbox.north}]")
-        
+        """The last `day_range` days (UTC, today included). FIRMS caps one request at 5 days, so longer windows are
+        fetched as consecutive dated pieces of up to 5 days."""
+        if day_range <= self.MAX_SPAN:
+            return self._fetch_url(self._build_url(source_code, bbox, day_range), source_code)
+        today = dt.datetime.now(dt.timezone.utc).date()
+        day, rows = today - dt.timedelta(days=day_range - 1), []
+        while day <= today:
+            span = min(self.MAX_SPAN, (today - day).days + 1)
+            rows += self._fetch_url(self._build_url(source_code, bbox, span, day), source_code)
+            day += dt.timedelta(days=span)
+        return rows
+
+    def _fetch_url(self, url: str, source_code: str) -> List[Dict[str, Any]]:
+        logger.info(f"FIRMS: querying {source_code}")
         try:
             req = urllib.request.Request(
                 url, 
@@ -40,6 +54,10 @@ class FIRMSClient:
                     return []
                 
                 content = resp.read().decode('utf-8').strip()
+                if not content.startswith('latitude'):
+                    # FIRMS answers errors (bad key, invalid day range, rate limit) with 200 and a plain message.
+                    logger.warning(f"FIRMS {source_code}: {content[:120]}")
+                    return []
                 lines = content.split('\n')
                 if len(lines) <= 1:
                     return []
@@ -116,11 +134,14 @@ class FIRMSClient:
 
         return hotspots
 
-    async def get_all_fires(self, bbox: BoundingBox, day_range: int = 1) -> Dict[str, List[FireHotspot]]:
+    async def get_all_fires(self, bbox: BoundingBox, day_range: int = 1, rolling: bool = False) -> Dict[str, List[FireHotspot]]:
         """
-        Asynchronously fetches both MODIS and VIIRS sources in parallel.
+        Asynchronously fetches both MODIS and VIIRS sources in parallel. FIRMS counts whole UTC days, so `day_range=1`
+        alone is "today so far" and can be almost empty early in the UTC day; `rolling` gives the true last
+        day_range × 24 hours instead (one extra day is fetched and cut at the exact time).
         """
         loop = asyncio.get_event_loop()
+        fetch_days = day_range + 1 if rolling else day_range
         
         sources = {
             "MODIS": "MODIS_NRT",
@@ -130,7 +151,7 @@ class FIRMSClient:
         }
 
         tasks = [
-            loop.run_in_executor(None, self._fetch_source_sync, code, bbox, day_range)
+            loop.run_in_executor(None, self._fetch_source_sync, code, bbox, fetch_days)
             for code in sources.values()
         ]
         
@@ -140,6 +161,11 @@ class FIRMSClient:
         for (sensor_name, _), raw_data in zip(sources.items(), raw_results):
             parsed_results[sensor_name] = self.parse_hotspots(raw_data, sensor_name)
             
+        if rolling:
+            cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=day_range)
+            stamp = cutoff.strftime("%Y-%m-%d%H%M")
+            parsed_results = {k: [f for f in v if f"{f.acq_date}{(f.acq_time or '').zfill(4)}" >= stamp]
+                              for k, v in parsed_results.items()}
         return parsed_results
 
 firms_client = FIRMSClient()

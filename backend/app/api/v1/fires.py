@@ -76,7 +76,7 @@ async def get_live_fires(bbox: BoundingBox, days: int = Query(1, ge=1, le=10)):
 
 async def _fetch_live(bbox: BoundingBox, days: int) -> LiveFireResponse:
     try:
-        results = await firms_client.get_all_fires(bbox, day_range=days)
+        results = await firms_client.get_all_fires(bbox, day_range=days, rolling=True)
         modis_list = results.get("MODIS", [])
         viirs_snpp = results.get("VIIRS_SNPP", [])
         viirs_noaa20 = results.get("VIIRS_NOAA20", []) + results.get("VIIRS_NOAA21", [])

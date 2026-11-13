@@ -457,17 +457,226 @@ class FireRecord:
                 "expected": round(expected, 1),
                 "delta_pct": round((p["harmonized"] / expected - 1) * 100, 1) if expected >= self.floor * p["days"] / 7 else None}
 
+    # ── calendar months and date ranges ──────────────────────────────────────────
+    # The record is weekly; each week is spread evenly over its days (7, or 8–9 for week 52) so that calendar months
+    # and any date range can be summed exactly, without the 4-vs-5-week bias of assigning whole weeks to months.
+    def _days(self):
+        if getattr(self, "_dcache", None) is not None:
+            return self._dcache
+        dates = pd.date_range(dt.date(FIRST_YEAR, 1, 1), dt.date(int(self.years[-1]), 12, 31), freq="D")
+        yi = dates.year.to_numpy() - FIRST_YEAR
+        wk = store.week_of_year(dates.dayofyear.to_numpy()) - 1
+        wlen = np.where(wk == WEEKS - 1, np.where(dates.is_leap_year, 366, 365) - (WEEKS - 1) * 7, 7)
+        per = lambda a: a[yi, wk] / wlen
+        d = {"dates": dates, "h": per(self.h), "hf": per(self.hf),
+             "m": np.where(self.valid[yi, wk], per(self.m), np.nan),
+             "v": np.where(self.valid[yi, wk] & (dates.year.to_numpy() >= VIIRS_START), per(self.v), np.nan)}
+        # The week in progress counts too, spread over its finished days, so that the month just ended and the
+        # current month are not held back until the week closes. It stays out of the calendar statistics.
+        p = self.partial
+        if p:
+            i0, i1 = ((pd.Timestamp(p[k]) - dates[0]).days for k in ("start", "end"))
+            if i0 <= i1 < len(dates):
+                n, w = i1 - i0 + 1, p["week"] - 1
+                d["h"][i0:i1 + 1], d["hf"][i0:i1 + 1] = p["harmonized"] / n, p["frp"] / n
+                d["m"][i0:i1 + 1] = self.m[-1, w] / n
+                if self.cur_year >= VIIRS_START:
+                    d["v"][i0:i1 + 1] = self.v[-1, w] / n
+        self._dcache = d
+        return self._dcache
+
+    def data_end(self) -> dt.date:
+        """Last day the record covers: the last finished day of the week in progress, else the last full week."""
+        if self.partial:
+            return self.partial["end"]
+        return dt.date(self.cur_year, 1, 1) + dt.timedelta(days=self.cur_week * 7 - 1) if self.cur_week < WEEKS \
+            else dt.date(self.cur_year, 12, 31)
+
+    def _window(self, a: dt.date, b: dt.date) -> tuple[float, int, int]:
+        """(harmonized sum, valid days, days) over a..b inclusive."""
+        d = self._days()
+        i0 = (pd.Timestamp(a) - d["dates"][0]).days
+        i1 = (pd.Timestamp(b) - d["dates"][0]).days
+        if i1 < 0 or i0 >= len(d["dates"]):
+            return float("nan"), 0, max(0, i1 - i0 + 1)
+        seg = d["h"][max(0, i0):i1 + 1]
+        n = i1 - i0 + 1
+        return float(np.nansum(seg)), int(np.isfinite(seg).sum()), n
+
+    def month_table(self) -> np.ndarray:
+        """Harmonized detections per (year, calendar month); NaN unless every day of the month is covered."""
+        d = self._days()
+        t = pd.DataFrame({"y": d["dates"].year, "m": d["dates"].month, "h": d["h"]}).groupby(["y", "m"])["h"]
+        tot, cnt, size = t.sum(), t.count(), t.size()
+        tot[cnt < size] = np.nan
+        out = np.full((len(self.years), 12), np.nan)
+        for (y, m), v in tot.items():
+            out[y - FIRST_YEAR, m - 1] = v
+        return out
+
     def monthly(self) -> list[dict]:
+        """One row per calendar month: the numbers shown everywhere a month appears (calendar, trend, month statistics
+        and downloads). `complete` is false for a month the record only partly covers; the median, the ratio to it and
+        the percentile (rank among the same month of 2003–2025) are given for complete months."""
+        d = self._days()
+        t = pd.DataFrame({"y": d["dates"].year, "m": d["dates"].month, "h": d["h"], "f": d["hf"], "mo": d["m"], "v": d["v"]})
+        g = t.groupby(["y", "m"])
+        s, cnt, size = g[["h", "f", "mo", "v"]].sum(min_count=1), g["h"].count(), g.size()
+        M = self.month_table()
+        base = M[(self.years >= BASE_START) & (self.years <= BASE_END)]
         out = []
+        for (y, m), r in s.iterrows():
+            if not cnt[(y, m)]:
+                continue
+            col = base[:, m - 1]
+            col = col[np.isfinite(col)]
+            full = bool(cnt[(y, m)] == size[(y, m)])
+            med = float(np.median(col)) if len(col) else float("nan")
+            out.append({"year": int(y), "month": int(m), "harmonized": round(float(r["h"]), 1), "frp_mw": round(float(r["f"]), 1),
+                        "modis": int(round(r["mo"])) if np.isfinite(r["mo"]) else None,
+                        "viirs": int(round(r["v"])) if y >= VIIRS_START and np.isfinite(r["v"]) else None,
+                        "complete": full, "median": round(med, 1) if np.isfinite(med) else None,
+                        "x_median": round(float(r["h"]) / med, 2) if full and np.isfinite(med) and med >= self.floor else None,
+                        "percentile": round(float((col < r["h"]).mean() * 100), 1) if full and len(col) else None})
+        return out
+
+    def month_stats(self) -> dict:
+        """Which months and years burn most, and how the current and last full month compare with their median."""
+        M = self.month_table()
+        bi = (self.years >= BASE_START) & (self.years <= BASE_END)
+        r1 = lambda x: None if x is None or not np.isfinite(x) else round(float(x), 1)
+        with np.errstate(invalid="ignore"):
+            med, p25, p75 = (np.nanpercentile(M[bi], q, 0) for q in (50, 25, 75))
+            mean = np.nanmean(M[bi], 0)
+        clim = [{"month": m + 1, "name": _MONTHS[m], "median": r1(med[m]), "p25": r1(p25[m]), "p75": r1(p75[m]),
+                 "mean": r1(mean[m]), "share_pct": r1(med[m] / np.nansum(med) * 100) if np.nansum(med) > 0 else None}
+                for m in range(12)]
+
+        def rank(col: np.ndarray, v: float) -> tuple[int, int]:
+            ok = col[np.isfinite(col)]
+            return int((ok > v).sum()) + 1, int(len(ok))
+
+        def compare(y: int, m: int, v: float, ref: np.ndarray, **extra) -> dict:
+            md = float(np.nanmedian(ref[bi])) if np.isfinite(ref[bi]).any() else float("nan")
+            rk, of = rank(ref, v)
+            return {"year": y, "month": m + 1, "name": _MONTHS[m], "value": r1(v), "median": r1(md),
+                    "delta_vs_median_pct": r1((v / md - 1) * 100) if md and np.isfinite(md) and md >= self.floor else None,
+                    "x_median": round(v / md, 2) if md and np.isfinite(md) and md >= self.floor else None,
+                    "rank": rk, "of_years": of, **extra}
+
+        # Last complete calendar month.
+        last = None
+        for i in range(len(self.years) - 1, -1, -1):
+            done = np.where(np.isfinite(M[i]))[0]
+            if len(done):
+                m = int(done[-1])
+                last = compare(int(self.years[i]), m, float(M[i, m]), M[:, m])
+                break
+        # The month in progress, compared day for day: the same days of that month in every other year.
+        end = self.data_end()
+        cur = None
+        if end.month != 12 or end.day != 31:
+            nxt = end + dt.timedelta(days=1)
+            m0 = nxt.month - 1
+            if end.month == nxt.month:  # the record ends inside this month
+                first = end.replace(day=1)
+                v, ok, n = self._window(first, end)
+                same = np.array([self._same_days(int(y), first, end) for y in self.years])
+                cur = compare(end.year, m0, v, same, through=end.isoformat(), days=n,
+                              full_month_median=r1(med[m0]))
+        # Rankings.
+        flat = [(int(self.years[i]), m, float(M[i, m])) for i in range(len(self.years)) for m in range(12) if np.isfinite(M[i, m])]
+        flat.sort(key=lambda t: -t[2])
+        top_months = [{"year": y, "month": m + 1, "name": _MONTHS[m], "value": r1(v),
+                       "x_median": round(v / med[m], 2) if med[m] >= self.floor else None} for y, m, v in flat[:10]]
+        yearly = []
         for i, y in enumerate(self.years):
-            for mo in range(1, 13):
-                cols = MONTH_OF_WEEK == mo
-                valid = self.valid[i, cols]
-                if not valid.any():
+            full = bool(np.isfinite(M[i]).all())
+            yearly.append({"year": int(y), "total": r1(np.nansum(M[i])) if full else None, "complete": full})
+        annual = np.array([r["total"] if r["complete"] else np.nan for r in yearly], float)
+        amed = float(np.nanmedian(annual[bi])) if np.isfinite(annual[bi]).any() else float("nan")
+        for r in yearly:
+            if r["complete"]:
+                r["rank"], r["of_years"] = rank(annual, r["total"])
+                r["x_median"] = round(r["total"] / amed, 2) if amed and np.isfinite(amed) and amed > 0 else None
+        top_years = sorted([r for r in yearly if r["complete"]], key=lambda r: -r["total"])[:5]
+        # Year to date, against the same days of every other year.
+        ytd_v, _, _ = self._window(dt.date(end.year, 1, 1), end)
+        ytd_same = np.array([self._same_days(int(y), dt.date(end.year, 1, 1), end) for y in self.years])
+        rk, of = rank(ytd_same, ytd_v)
+        ymed = float(np.nanmedian(ytd_same[bi])) if np.isfinite(ytd_same[bi]).any() else float("nan")
+        return {
+            "baseline": f"{BASE_START}–{BASE_END}", "statistic": "median", "data_end": end.isoformat(),
+            "climatology": clim, "busiest_months": [c["month"] for c in sorted(clim, key=lambda c: -(c["median"] or 0))],
+            "current_month": cur, "last_full_month": last,
+            "top_months": top_months, "top_years": top_years, "yearly": yearly,
+            "year_to_date": {"year": end.year, "through": end.isoformat(), "value": r1(ytd_v), "median": r1(ymed),
+                             "delta_vs_median_pct": r1((ytd_v / ymed - 1) * 100) if ymed and np.isfinite(ymed) and ymed > 0 else None,
+                             "rank": rk, "of_years": of},
+        }
+
+    def _same_days(self, year: int, a: dt.date, b: dt.date) -> float:
+        """Harmonized sum over the same calendar days as a..b, shifted into `year` (NaN unless fully covered)."""
+        k = year - b.year
+        a2, b2 = _shift(a, k), _shift(b, k)
+        v, ok, n = self._window(a2, b2)
+        return v if n and ok == n else float("nan")
+
+    def range_stats(self, start: dt.date, end: dt.date) -> dict:
+        """Harmonized activity in a date range, and the same dates in every other year (for ranges up to a year)."""
+        first, last = dt.date(FIRST_YEAR, 11, 1), self.data_end()
+        clipped = end > last
+        end = min(end, last)
+        start = max(start, first)
+        if start > end:
+            return {"available": False,
+                    "reason": f"The harmonized record runs from {first.isoformat()} to {last.isoformat()}; later days are in the "
+                              f"day-by-day hotspots."}
+        d = self._days()
+        i0, i1 = (pd.Timestamp(start) - d["dates"][0]).days, (pd.Timestamp(end) - d["dates"][0]).days
+        sl = slice(i0, i1 + 1)
+        val, ok, n = self._window(start, end)
+        r1 = lambda x: None if x is None or not np.isfinite(x) else round(float(x), 1)
+        out = {"available": True, "start": start.isoformat(), "end": end.isoformat(), "days": n, "covered_days": ok,
+               "end_clipped_to": last.isoformat() if clipped else None,
+               # Under a week the weekly record can only give that week's average rate, not what happened on those days.
+               "resolution": "weekly average" if n < 7 else "weekly",
+               "harmonized": r1(val), "frp_mw": r1(np.nansum(d["hf"][sl])),
+               "modis_raw": r1(np.nansum(d["m"][sl])), "viirs_raw": r1(np.nansum(d["v"][sl])) if end.year >= VIIRS_START else None}
+        # Weekly series inside the range (the reliable resolution).
+        wk = []
+        for i in range(len(self.years)):
+            for w in range(WEEKS):
+                ws = dt.date(int(self.years[i]), 1, 1) + dt.timedelta(days=w * 7)
+                we = ws + dt.timedelta(days=6 if w < WEEKS - 1 else (dt.date(ws.year, 12, 31) - ws).days)
+                if we < start or ws > end:
                     continue
-                out.append({"year": int(y), "month": mo,
-                            "modis": int(self.m[i, cols].sum()), "viirs": int(self.v[i, cols].sum()) if y >= VIIRS_START else None,
-                            "harmonized": round(float(np.nansum(self.h[i, cols])), 1)})
+                now = bool(self.partial and i == len(self.years) - 1 and w == self.partial["week"] - 1)
+                h = self.partial["harmonized"] if now else self.h[i, w]
+                wk.append({"year": int(self.years[i]), "week": w + 1, "week_start": ws.isoformat(), "in_progress": now,
+                           "harmonized": r1(h), "modis_raw": int(self.m[i, w]),
+                           "viirs_raw": int(self.v[i, w]) if self.years[i] >= VIIRS_START else None,
+                           "percentile": round(self.percentile(w, float(self.h2[i, w])), 1) if np.isfinite(self.h2[i, w]) else None})
+        out["weekly"] = wk
+        if (end - start).days < 366:
+            bi = (self.years >= BASE_START) & (self.years <= BASE_END)
+            per = [{"year": int(y), "harmonized": r1(self._same_days(int(y), start, end))} for y in self.years]
+            vals = np.array([p["harmonized"] if p["harmonized"] is not None else np.nan for p in per], float)
+            base = vals[bi]
+            md = float(np.nanmedian(base)) if np.isfinite(base).any() else float("nan")
+            mean = float(np.nanmean(base)) if np.isfinite(base).any() else float("nan")
+            okv = vals[np.isfinite(vals)]
+            covered = ok == n
+            out["same_dates"] = {
+                "baseline": f"{BASE_START}–{BASE_END}", "median": r1(md), "mean": r1(mean),
+                "p25": r1(np.nanpercentile(base, 25)) if np.isfinite(base).any() else None,
+                "p75": r1(np.nanpercentile(base, 75)) if np.isfinite(base).any() else None,
+                "x_median": round(val / md, 2) if covered and md and np.isfinite(md) and md >= self.floor * n / 7 else None,
+                "delta_vs_median_pct": r1((val / md - 1) * 100) if covered and md and np.isfinite(md) and md >= self.floor * n / 7 else None,
+                "rank": int((okv > val).sum()) + 1 if covered else None, "of_years": int(len(okv)),
+                "percentile": r1((base[np.isfinite(base)] < val).mean() * 100) if covered and np.isfinite(base).any() else None,
+                "years": per,
+            }
         return out
 
     def calibration(self) -> dict:
@@ -505,6 +714,14 @@ def _week_label(week: int, end: bool = False) -> str:
     """'3 Mar'-style label for the start (or end) of a fixed 52-week calendar week."""
     d = dt.date(2001, 1, 1) + dt.timedelta(days=(week - 1) * 7 + (6 if end else 0))
     return f"{d.day} {_MONTHS[d.month - 1]}"
+
+
+def _shift(d: dt.date, years: int) -> dt.date:
+    """The same calendar day `years` later (29 February → 28 February in common years)."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, day=28)
 
 
 def _week_start(year: int, week: int) -> str:

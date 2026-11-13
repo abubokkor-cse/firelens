@@ -13,6 +13,8 @@ body{font-feature-settings:"tnum" 1}
 body{margin:0;background:radial-gradient(1200px 700px at 50% -10%,rgba(40,90,200,.18),transparent 70%),#04060c url(/night-sky.jpg) center/cover fixed;color:#e8eefb;font-family:Manrope,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 
 /* Header logo: a live flame — three flickering tongues, a hot core, rising sparks and a breathing glow (CSS only). */
+.fl-phone{display:none}
+@media (max-width:720px){.fl-phone{display:block}}
 .fl-flame{position:relative;width:34px;height:34px;flex:none}
 .fl-glow{position:absolute;inset:-7px;border-radius:50%;background:radial-gradient(circle at 50% 68%,rgba(255,122,26,.55),rgba(255,59,42,.16) 45%,transparent 70%);animation:fl-glow 1.7s ease-in-out infinite alternate}
 .fl-tongue{position:absolute;left:50%;bottom:3px;border-radius:50% 50% 22% 22%/62% 62% 38% 38%;transform-origin:50% 100%}

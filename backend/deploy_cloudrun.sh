@@ -15,7 +15,7 @@ gcloud run deploy "$SERVICE" \
   --source . \
   --region "$REGION" \
   --allow-unauthenticated \
-  --memory 2Gi --cpu 1 \
+  --memory 4Gi --cpu 1 \
   --min-instances 0 --max-instances 4 \
   --cpu-boost \
   --set-env-vars "^;^FIRELENS_ARCHIVE_URL=${FIRELENS_ARCHIVE_URL};CORS_ORIGINS_RAW=${CORS_ORIGINS_RAW};SITE_URL=${SITE_URL};ALERTS_FROM=${ALERTS_FROM};ALERTS_STORE=firestore;PUBLIC_API_URL=${PUBLIC_API_URL}" \

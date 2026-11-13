@@ -19,10 +19,16 @@ FireLens puts both sensors on one scale and turns the result into a tool for ear
 
 ## What it does
 
-- **Any area of interest.** Search a place, click a country, draw a box, upload a GeoJSON boundary, or press
-  *Fires near me*.
-- **Burning activity calendar.** Every week since 2000 on one grid — fire count, intensity (FRP) or anomaly — with the
-  area's *critical period*: the weeks that normally hold 80 % of its burning.
+- **Any area of interest.** Search a place, click a country, draw a box, upload a GeoJSON boundary, type a latitude
+  and longitude with a radius (or `W, S, E, N`), or press *Fires near me*.
+- **Any date range — down to a single day.** Harmonized total for the dates, the same dates in every year since 2000
+  with their 2003–2025 median, the range's rank among all years, every hotspot detected (map and day-by-day chart),
+  and downloads: a CSV of every hotspot, daily and per-year tables, PNG charts and map, or everything as one ZIP.
+- **Burning activity calendar.** Every month (with its number, the monthly median and yearly totals) or week since 2000
+  on one grid — fire count, intensity (FRP) or anomaly — with the area's *critical period*: the weeks that normally hold 80 % of its burning. Colour ramps include viridis and
+  cividis (colour-blind safe) with a numeric legend; the calendar downloads as PNG, SVG or CSV.
+- **Compared with the median.** This month so far, the last full month and the year to date against the 2003–2025
+  median for the same days, with their rank; the typical year month by month; the most-burning years and months.
 - **Unusual conditions.** Early or late onset, surges and suppression against the 2003–2025 baseline, plus an
   eight-week outlook built from the past seasons that looked most like this one.
 - **Always current.** The archive grows every day; between updates, any area is topped up from the FIRMS
@@ -98,7 +104,8 @@ npm install
 npm run dev                                # http://localhost:5173
 ```
 
-`python -m scripts.ingest_global --update` keeps a local archive current. The frontend reads `VITE_API_URL`
+`python -m scripts.ingest_global --update` keeps a local archive current. Tests: `pip install -r requirements-dev.txt`
+then `python -m pytest tests`. The frontend reads `VITE_API_URL`
 (default `http://localhost:8000/api/v1`) and, optionally, `VITE_REPORTS_URL` for pre-built reports.
 
 ## How it is deployed
@@ -123,6 +130,20 @@ live top-up keeps every page current in between.
 | `scripts.update daily` | every day, 06:30 UTC | newest fires → `recent` tiles, upload only what changed |
 | `scripts.update rebuild` | when a new NASA month is out | new month → `hist`, retrain, rebuild everything |
 | `scripts.update reports` | Sundays | all country reports and the Global watchlist |
+
+### API additions
+
+| Endpoint | What it returns |
+| :--- | :--- |
+| `POST /api/v1/calendar/range?start=&end=` | Harmonized total, raw MODIS/VIIRS, weekly series, and the same dates in every year (median, rank) |
+| `POST /api/v1/hotspots/search?start=&end=` | Every FIRMS detection in the AOI and dates (≤ 62 days): totals, daily table, strongest points |
+| `POST /api/v1/hotspots/csv?start=&end=` | The same as CSV, one row per detection, with `used_in_record` and `harmonized_weight` |
+| `POST /api/v1/hotspots/history?start=&end=` | Up to 7 days: the same dates in every year from real detections, with median and rank |
+
+`/calendar/report` also returns `month_stats`, and `monthly` holds true calendar months (weeks spread over their days),
+so a month shows the same number everywhere. A search holding more than 300,000 detections stops at its last complete
+day and says so (`truncated`, `complete_through`). Hotspot searches read each day from the FIRMS standard product while
+it exists and near-real-time after it (FIRMS' data-availability table), 5 days per request — FIRMS' limit.
 
 1. **API:** store `firms-api-key`, `resend-api-key` and `alerts-run-token` in Secret Manager, then run
    `backend/deploy_cloudrun.sh`. It also creates the hourly alert job.

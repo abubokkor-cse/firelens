@@ -143,6 +143,23 @@ def standard_end():
     return dt.date.fromisoformat(json.load(open(META_PATH))["standard_through"])
 
 
+def stale_windows(files: list, std_end, today, refresh_days: int = 8) -> list:
+    """NRT shards to delete before refetching: windows that may still change, windows the science files now cover, and
+    windows off the current 5-day grid. The grid starts the day after the science archive, so it moves with each new
+    monthly file: a window left from the old grid overlaps the new ones and would count those days twice."""
+    import datetime as dt
+    out = []
+    for f in files:
+        if "_nrt_" not in f:
+            continue
+        s = f.split("_nrt_")[1][:8]
+        d = dt.date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+        off_grid = (d - std_end).days % 5 != 1
+        if d >= today - dt.timedelta(days=refresh_days) or d <= std_end or off_grid:
+            out.append(f)
+    return out
+
+
 def nrt(refresh_days: int = 8):
     """Near-real-time bridge: FIRMS worldwide NRT detections from the day after the last monthly science file to
     today, in 5-day windows (shards <S>_nrt_<YYYYMMDD>.parquet). The last `refresh_days` are always refetched,
@@ -158,11 +175,8 @@ def nrt(refresh_days: int = 8):
     std_end = standard_end()
     today, key = dt.date.today(), settings.FIRMS_API_KEY
     avail = availability(key)
-    for f in os.listdir(SHARDS):  # drop windows that may still change
-        if "_nrt_" in f:
-            d = dt.date.fromisoformat(f.split("_nrt_")[1][:8][:4] + "-" + f.split("_nrt_")[1][4:6] + "-" + f.split("_nrt_")[1][6:8])
-            if d >= today - dt.timedelta(days=refresh_days) or d <= std_end:
-                os.remove(os.path.join(SHARDS, f))
+    for f in stale_windows(os.listdir(SHARDS), std_end, today, refresh_days):
+        os.remove(os.path.join(SHARDS, f))
     day = std_end + dt.timedelta(days=1)
     while day <= today:
         span = min(5, (today - day).days + 1)

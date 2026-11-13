@@ -171,8 +171,33 @@ def report_payload(rec: fire_record.FireRecord, aoi_name: str, bbox: Optional[Bo
         "outlook": rec.outlook(),
         "calibration": rec.calibration(),
         "monthly": rec.monthly(),
+        "month_stats": rec.month_stats(),
         "calendar": rec.calendar(),
     }
+
+
+@router.post("/range")
+def get_range(
+    aoi: Optional[AOIRequest] = None,
+    start: dt.date = Query(..., description="First day, YYYY-MM-DD"),
+    end: dt.date = Query(..., description="Last day, YYYY-MM-DD (inclusive)"),
+    aoi_name: str = Query("Selected Region"),
+    country: Optional[str] = Query(None, description="Ingested FIRMS country name, e.g. Bangladesh"),
+    live: bool = Query(True, description="Top the record up to today from FIRMS near-real-time data"),
+):
+    """
+    Harmonized burning in a date range for an AOI: total, raw MODIS / VIIRS, FRP and the weekly series inside the
+    range — and, for ranges up to a year, the same calendar dates in every year since 2000 with their 2003–2025
+    median, the range's rank among all years and its ratio to the median.
+    """
+    if end < start:
+        raise HTTPException(status_code=422, detail="The end date is before the start date.")
+    bbox, geometry = (aoi.bbox, aoi.geometry) if aoi else (None, None)
+    rec = record_for(bbox, country, geometry, live=live and _behind())
+    out = rec.range_stats(start, end)
+    out["aoi_name"] = aoi_name
+    out["through"] = rec.through.isoformat() if rec.through else archive_store.through()
+    return out
 
 
 @router.post("/watchlist")

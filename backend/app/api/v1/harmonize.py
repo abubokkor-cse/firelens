@@ -20,7 +20,7 @@ async def calculate_harmonization(req: HarmonizeRequest):
     cross-sensor calibration to output a standardized, harmonized fire count and FRP.
     """
     try:
-        results = await firms_client.get_all_fires(req.bbox, day_range=req.days)
+        results = await firms_client.get_all_fires(req.bbox, day_range=req.days, rolling=True)
         modis_list = results.get("MODIS", [])
         viirs_snpp = results.get("VIIRS_SNPP", [])
         viirs_noaa20 = results.get("VIIRS_NOAA20", []) + results.get("VIIRS_NOAA21", [])
