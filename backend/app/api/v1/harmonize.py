@@ -23,7 +23,8 @@ async def calculate_harmonization(req: HarmonizeRequest):
         results = await firms_client.get_all_fires(req.bbox, day_range=req.days, rolling=True)
         modis_list = results.get("MODIS", [])
         viirs_snpp = results.get("VIIRS_SNPP", [])
-        viirs_noaa20 = results.get("VIIRS_NOAA20", []) + results.get("VIIRS_NOAA21", [])
+        viirs_n20, viirs_n21 = results.get("VIIRS_NOAA20", []), results.get("VIIRS_NOAA21", [])
+        viirs_noaa20 = viirs_n20 + viirs_n21
         all_viirs = viirs_snpp + viirs_noaa20
 
         harmonized = harmonizer_engine.harmonize_dataset(
@@ -35,13 +36,20 @@ async def calculate_harmonization(req: HarmonizeRequest):
         rec = _local_record(req.bbox) if (req.landcover or "All") == "All" else None
         if rec is not None:
             # Same calibration as the archive calendar, so live numbers sit on the 2000–present scale.
-            snpp_n = len(viirs_snpp)
-            snpp_frp = sum(f.frp or 0.0 for f in viirs_snpp)
+            # When the S-NPP feed has nothing for the window (its NRT feed ended 2 Nov 2026), NOAA-20 stands in,
+            # scaled to S-NPP by this area's own overlap ratio, exactly as the archive fills S-NPP gaps.
+            stand_in = not viirs_snpp and bool(viirs_n20 or viirs_n21)
+            basis = viirs_snpp if not stand_in else (viirs_n20 or viirs_n21)
+            rho_n, rho_f = (1.0, 1.0) if not stand_in else (rec.rho_j, rec.rho_jf)
+            snpp_n = len(basis) * rho_n
+            snpp_frp = sum(f.frp or 0.0 for f in basis) * rho_f
             harmonized.harmonized_count = round(snpp_n / rec.alpha * rec.k, 1)
             harmonized.harmonized_frp = round(snpp_frp * rec.beta, 1)
             harmonized.scaling_factor_applied = round(rec.alpha / rec.k, 2)
+            src = ("VIIRS S-NPP" if not stand_in else
+                   f"VIIRS {'NOAA-20' if viirs_n20 else 'NOAA-21'} × {rho_n:.2f} (S-NPP feed unavailable)")
             harmonized.calibration_method = (f"Local calibration from {len(rec.calib_years)} overlap years "
-                                             f"(VIIRS S-NPP ÷ α={rec.alpha:.2f}, k={rec.k:.2f})")
+                                             f"({src} ÷ α={rec.alpha:.2f}, k={rec.k:.2f})")
         return harmonized
     except HTTPException:
         raise

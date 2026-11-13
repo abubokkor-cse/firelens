@@ -858,15 +858,32 @@ export default class FireLens extends React.Component {
 
   setRegion(r) { if (!REG[r]) return; this.setState({ region: r, mapZoom: 1 }); this.fetchRegion(r); }
 
-  async api(path, body, method = 'POST', timeout = 30000) {
+  async api(path, body, method = 'POST', timeout = 30000, retry = true) {
     const base = this.props.apiBase ?? API_BASE;
     const ac = new AbortController(), t = setTimeout(() => ac.abort(), timeout);
+    let out;
     try {
       const init = method === 'GET' ? { signal: ac.signal } : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? null), signal: ac.signal };
-      const r = await fetch(base + path, init);
+      let r;
+      try { r = await fetch(base + path, init); }
+      catch (err) {
+        // A dropped connection (not our own timeout) is retried once before the page counts as offline.
+        if (retry && !ac.signal.aborted) { clearTimeout(t); await new Promise(res => setTimeout(res, 1500)); return this.api(path, body, method, timeout, false); }
+        throw err;
+      }
       if (!r.ok) { let d = ''; try { d = (await r.json()).detail; } catch (_) { /* no JSON body */ } const err = new Error(d || 'HTTP ' + r.status); err.status = r.status; throw err; }
-      return await r.json();
+      out = await r.json();
     } finally { clearTimeout(t); }
+    if (this.offline) this.backOnline();
+    return out;
+  }
+  /** One failed request must not leave the whole visit on sample data: the next success clears it and reloads. */
+  backOnline() {
+    this.offline = false;
+    for (const k in this.store) { const e = this.store[k]; if (e && e.reportErr && !e.report) { e.reportErr = null; e.reportP = null; } }
+    if (!this.liveGlobal) this.fetchGlobal();
+    this.fetchReport(this.state.region);
+    this.setState(s => ({ apiTick: s.apiTick + 1 }));
   }
   async fetchGlobal() {
     if (!(this.props.useLiveApi ?? true)) { this.offline = true; return; }
@@ -896,8 +913,8 @@ export default class FireLens extends React.Component {
       if (!idx || !idx.slugs.has(s) || (geo && !idx.countrySlugs.has(s))) return fromApi();
       return fetch(REPORTS_URL + '/reports/' + s + '.json?v=' + idx.through).then(r => (r.ok ? r.json() : Promise.reject(new Error('CDN ' + r.status)))).catch(fromApi);
     })
-      .then(r => { cur.report = r; cur.reportErr = null; cur.vm = null; cur.liveAt = r && r.live ? Date.now() : 0; return r; },
-            err => { if (err.status === 404 || err.status === 503) cur.noArchive = err.message; else { cur.reportErr = err.message || 'offline'; if (!err.status) this.offline = true; } return null; })
+      .then(r => { cur.report = r; cur.reportErr = null; cur.vm = null; cur.liveAt = r && r.live ? Date.now() : 0; if (r && this.offline) this.backOnline(); return r; },
+            err => { cur.reportP = null; if (err.status === 404 || err.status === 503) cur.noArchive = err.message; else { cur.reportErr = err.message || 'offline'; if (!err.status) this.offline = true; } return null; })
       .finally(() => { cur.reportP = null; this._gk = null; this.setState(s => ({ apiTick: s.apiTick + 1 })); });
     return cur.reportP;
   }

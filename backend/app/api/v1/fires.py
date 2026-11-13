@@ -125,7 +125,11 @@ def global_fires(days: int = Query(1, ge=1, le=5), cell: float = Query(0.5, ge=0
     if hit and time.time() - hit[0] < 3600:
         return hit[1]
     try:
-        df = _world("VIIRS_SNPP_NRT", days)
+        source = "VIIRS_SNPP_NRT"
+        df = _world(source, days)
+        if df.empty:   # S-NPP's NRT feed ended 2 Nov 2026: NOAA-20 carries the same VIIRS instrument
+            source = "VIIRS_NOAA20_NRT"
+            df = _world(source, days)
     except Exception as e:
         if hit:
             return hit[1]
@@ -135,7 +139,7 @@ def global_fires(days: int = Query(1, ge=1, le=5), cell: float = Query(0.5, ge=0
     g = df.assign(gy=gy, gx=gx).groupby(["gy", "gx"]).agg(n=("frp", "size"), frp=("frp", "sum")).reset_index()
     cells = [[round((y + .5) * cell, 3), round((x + .5) * cell, 3), int(n), round(float(f), 1)]
              for y, x, n, f in g[["gy", "gx", "n", "frp"]].itertuples(index=False)]
-    out = {"source": "VIIRS_SNPP_NRT", "days": days, "cell": cell, "detections": int(len(df)),
+    out = {"source": source, "days": days, "cell": cell, "detections": int(len(df)),
            "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "cells": cells}
     _global_cache[key] = (time.time(), out)
     return out
